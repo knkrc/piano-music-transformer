@@ -1,0 +1,38 @@
+[project]
+name = "piano-music-transformer"
+version = "0.1.0"
+description = "Symbolic piano music generation with a from-scratch Transformer, benchmarked against an LSTM baseline"
+readme = "README.md"
+requires-python = ">=3.13"
+license = "MIT"
+authors = [{ name = "Kaan", email = "knkrc26@gmail.com" }]
+
+dependencies = [
+    "torch>=2.14",
+    "miditok>=3.0.6",
+    "symusic>=0.6",
+    "numpy>=2.0",
+    "pyyaml>=6.0",
+    "tqdm>=4.66",
+]
+
+[dependency-groups]
+dev = ["pytest>=8.0", "ruff>=0.9"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/pmt"]
+
+[tool.ruff]
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

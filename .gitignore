@@ -1,0 +1,22 @@
+# Data and model artifacts (never committed)
+data/
+outputs/
+checkpoints/
+*.npy
+*.pt
+*.ckpt
+*.wav
+*.sf2
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
