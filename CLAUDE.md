@@ -37,7 +37,7 @@ important phase even though it looks like the most boring one.
 | Language | English everywhere | Public portfolio repo — code, comments, docs, commits |
 | Augmentation | Offline, transposition, train split only | BPE merges several events into one token, so pitch cannot be shifted on ids after the fact |
 | Batching | Step-indexed deterministic sampling, no `DataLoader` | Makes resume *exact* rather than approximate; memmap reads are microseconds, so there is nothing to prefetch |
-| Training budget | 12,000 steps (~3 epochs, ~5.5 h) | Phase 2 gets the identical budget — an under-trained baseline would flatter the Transformer |
+| Training budget | 12,000 steps (~3 epochs, ~10 h each) | Phase 2 gets the identical budget — an under-trained baseline would flatter the Transformer |
 | Model comparison | Matched on **parameters** (8.65M vs 8.40M), not width or depth | The question is which architecture spends the same budget better; different sizes cannot answer it. There is a test enforcing this |
 | Learning rate | Each architecture's conventional default (LSTM 1e-3, Transformer 6e-4) | Forcing a shared value would suit one of them; tuning one and not the other is worse. Neither got a sweep, and the README says so |
 | `vocab_size` | Derived from the data's `meta.json`, never configured | A model and tokenizer that disagree produce ids that cannot be decoded, and it only surfaces at generation time |
@@ -54,7 +54,8 @@ Apple M5, 16 GB unified memory, MPS backend.
 - Try `torch.autocast("mps", bfloat16)`; **fall back to fp32** on NaN or kernel errors, and record it here
 - `torch.compile` stays **off** by default (flaky on MPS); enabling it is opt-in
 - Every training run must be **resumable** (optimizer, scheduler and RNG state included) — overnight training is the working model
-- Expect training time in hours, not minutes. Every entry point keeps a `--smoke` mode for fast iteration
+- Expect training time in hours, not minutes, and **measure it over hours, not minutes**.
+  Every entry point keeps a `--smoke` mode for fast iteration
 
 ## 4. Deliberately out of scope
 
@@ -176,7 +177,7 @@ stale rather than archiving it.
 
 - **2026-09-06 — Phase 1 code complete, training in flight.**
   - **MPS is worth it for the LSTM:** 0.37 s/step vs 2.13 s on CPU at 8x1024 — 5.7x.
-    Real end-to-end throughput with `grad_accum=4` is ~20k tokens/s (1.64 s/step).
+    A 50-step burst measured 1.64 s/step — see the correction in the Phase 2 entry.
   - **bf16 buys only ~7% for the LSTM** (0.350 vs 0.374 s/step); the recurrent path is
     not matmul-bound. Baseline stays fp32. Re-measure for the Transformer, where the
     gain should be much larger — that is the one place this decision may flip.
@@ -219,6 +220,15 @@ stale rather than archiving it.
     with or without RoPE. Replaced with RoPE's actual defining property, that the
     query-key score depends only on the distance between positions.
   - **Do not run anything on the GPU during a long training run.** A CPU smoke test
-    plus one sampling call dropped throughput from 21k to 13k tokens/s.
+    plus one sampling call visibly dented throughput.
+  - **A short benchmark does not predict a long run.** 50 steps measured 1.64 s/step;
+    sustained over 2h45m the real rate is **2.92 s/step (~11k tokens/s)** — the burst
+    was optimistic by 1.8x, and the 12,000-step budget is ~10 hours per model, not
+    ~5.5. CPU sits at 2% throughout, so the run is GPU-bound and a laptop-class M5
+    does not hold its opening throughput under sustained load. Any future timing
+    claim in this project gets measured over at least an hour before it is written
+    down. The budget was kept at 12,000 anyway: the decision was made on its merits,
+    and shrinking it because the clock moved would weaken both models equally for
+    no gain in fairness.
   - Next: train the Transformer on the same 12,000-step budget once the GPU frees up,
     and measure bf16 for it - the one decision from Phase 1 likely to flip.
