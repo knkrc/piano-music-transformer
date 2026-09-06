@@ -1,21 +1,26 @@
 from __future__ import annotations
 
 import torch
-from torch import nn
 
+from pmt.models.base import LanguageModel
 from pmt.sample import generate, pick_next
 
 VOCAB = 8
 
 
-class ConstantModel(nn.Module):
+class ConstantModel(LanguageModel):
     """Always predicts one token, so generation behaviour can be tested exactly."""
 
-    def __init__(self, token: int) -> None:
+    def __init__(self, token: int, context_limit: int | None = None) -> None:
         super().__init__()
         self.token = token
+        self.context_limit = context_limit
 
-    def forward(self, tokens, state=None):
+    @property
+    def max_context(self) -> int | None:
+        return self.context_limit
+
+    def forward(self, tokens, state=None, use_cache=False):
         logits = torch.full((tokens.size(0), tokens.size(1), VOCAB), -10.0)
         logits[..., self.token] = 10.0
         return logits, state
@@ -73,3 +78,21 @@ def test_generation_respects_the_token_budget():
     )
 
     assert produced == [5] * 12
+
+
+def test_generation_stops_at_the_context_limit():
+    """A Transformer cannot see past its positional encoding, so sampling must stop."""
+    model = ConstantModel(token=5, context_limit=10)
+
+    produced = generate(
+        model,
+        [1, 1, 1],
+        max_new_tokens=100,
+        temperature=0.0,
+        top_k=0,
+        banned=[],
+        eos_id=2,
+        device=torch.device("cpu"),
+    )
+
+    assert len(produced) == 7  # 3 prompt tokens + 7 generated = the 10-token limit

@@ -38,6 +38,9 @@ important phase even though it looks like the most boring one.
 | Augmentation | Offline, transposition, train split only | BPE merges several events into one token, so pitch cannot be shifted on ids after the fact |
 | Batching | Step-indexed deterministic sampling, no `DataLoader` | Makes resume *exact* rather than approximate; memmap reads are microseconds, so there is nothing to prefetch |
 | Training budget | 12,000 steps (~3 epochs, ~5.5 h) | Phase 2 gets the identical budget — an under-trained baseline would flatter the Transformer |
+| Model comparison | Matched on **parameters** (8.65M vs 8.40M), not width or depth | The question is which architecture spends the same budget better; different sizes cannot answer it. There is a test enforcing this |
+| Learning rate | Each architecture's conventional default (LSTM 1e-3, Transformer 6e-4) | Forcing a shared value would suit one of them; tuning one and not the other is worse. Neither got a sweep, and the README says so |
+| `vocab_size` | Derived from the data's `meta.json`, never configured | A model and tokenizer that disagree produce ids that cannot be decoded, and it only surfaces at generation time |
 
 **The audio release is never downloaded.** MAESTRO with audio is ~120 GB; only the
 58 MB MIDI archive is fetched.
@@ -93,12 +96,12 @@ piano-music-transformer/
 - [~] **Phase 1 — LSTM baseline.** Augmentation, model, training loop with exact
       resume, sampling. Code complete and tested; the 12,000-step run is in flight.
       *Done when it produces a MIDI file worth listening to.*
-- [ ] **Phase 2 — Transformer.** Decoder-only, RoPE, pre-norm, SDPA, cosine LR,
-      gradient accumulation. Same pipeline, same CLI. *Done when it beats the
-      baseline on validation NLL.*
-- [ ] **Phase 3 — Sampling.** temperature / top-k / top-p / repetition penalty,
-      KV cache, **prompt continuation** (give it 4 bars, it continues). The demo
-      lives or dies here.
+- [~] **Phase 2 — Transformer.** Decoder-only, RoPE, pre-norm RMSNorm, SwiGLU, SDPA,
+      KV cache. Code complete and tested; waiting for the GPU. *Done when it beats
+      the baseline on validation NLL.*
+- [ ] **Phase 3 — Sampling.** top-p and repetition penalty, **prompt continuation**
+      (give it 4 bars, it continues), context sliding past `max_seq_len`. The KV
+      cache moved to Phase 2 - see the log. The demo lives or dies here.
 - [ ] **Phase 4 — Evaluation.** Perplexity plus musical metrics, LSTM vs
       Transformer table, rendered audio. *Done when the README has numbers and sound.*
 - [ ] **Phase 5 — Shop window.** Gradio demo, weights on the HF Hub, README with a
@@ -194,3 +197,28 @@ stale rather than archiving it.
     prints the event mix when a sample yields zero notes, which separates
     "undertrained" from "broken pipeline" at a glance.
   - Next: results from the 12,000-step run, then Phase 2.
+
+- **2026-09-06 — Phase 2 code complete, written while the baseline trains.**
+  - **The KV cache moved up from Phase 3, by force.** Both models share one
+    `generate()`, which advances one token at a time carrying a `state`. For an RNN
+    that state is free; for a Transformer it is the KV cache. Without it the
+    Transformer simply cannot sample, so it is not optional and not Phase 3 work.
+    A test asserts cached decoding matches a full forward pass to 1e-4.
+  - **`is_causal` is wrong once a cache exists.** It aligns the mask top-left, but a
+    cached query block sits at the *end* of the context. The attention shifts the
+    triangle by the cached length instead when the two lengths differ.
+  - **Bug with real reach: `vocab_size` was never tied to the data.** Model configs
+    defaulted to 4096 while the smoke dataset's tokenizer had 1024, so the model
+    emitted ids that did not exist and MidiTok died with `KeyError: None` deep in
+    BPE decoding. The LSTM had the same defect and hid it by collapsing onto frequent
+    tokens. `vocab_size` is now read from `meta.json` at training time and validated
+    at sampling time.
+  - **A test that measured nothing.** "Position changes the prediction", fed a
+    sequence of identical tokens, could never fail: identical tokens give identical
+    value vectors, and any weighted average of identical vectors is that vector -
+    with or without RoPE. Replaced with RoPE's actual defining property, that the
+    query-key score depends only on the distance between positions.
+  - **Do not run anything on the GPU during a long training run.** A CPU smoke test
+    plus one sampling call dropped throughput from 21k to 13k tokens/s.
+  - Next: train the Transformer on the same 12,000-step budget once the GPU frees up,
+    and measure bf16 for it - the one decision from Phase 1 likely to flip.

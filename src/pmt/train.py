@@ -17,7 +17,7 @@ import json
 import math
 import random
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 
 import numpy as np
@@ -28,8 +28,12 @@ from torch import nn
 from pmt.config import OUTPUTS_DIR, PROCESSED_DIR, load_config
 from pmt.data.dataset import TokenWindowDataset, deterministic_batch, evaluation_batches
 from pmt.models.lstm import LSTMConfig, build_lstm
+from pmt.models.transformer import TransformerConfig, build_transformer
 
-MODELS = {"lstm": (LSTMConfig, build_lstm)}
+MODELS = {
+    "lstm": (LSTMConfig, build_lstm),
+    "transformer": (TransformerConfig, build_transformer),
+}
 
 
 @dataclass(slots=True)
@@ -148,6 +152,17 @@ def train(
     seed_everything(cfg.seed)
     device = resolve_device(cfg.device)
     out_dir.mkdir(parents=True, exist_ok=True)
+
+    # Vocabulary size is a property of the prepared data, never a free parameter.
+    # Leaving the two to drift apart lets a model emit ids the tokenizer cannot
+    # decode, which surfaces only at generation time as a decoding crash.
+    meta = json.loads((data_dir / "meta.json").read_text())
+    if model_cfg.vocab_size != meta["vocab_size"]:
+        print(
+            f"vocab_size {model_cfg.vocab_size} -> {meta['vocab_size']} "
+            f"(taken from {data_dir.name}/meta.json)"
+        )
+        model_cfg = replace(model_cfg, vocab_size=meta["vocab_size"])
 
     train_data = TokenWindowDataset(data_dir / "train.npy", cfg.block_size)
     val_data = TokenWindowDataset(data_dir / "validation.npy", cfg.block_size)

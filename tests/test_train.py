@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import replace
 
 import numpy as np
@@ -33,6 +34,7 @@ def token_data(tmp_path):
     rng = np.random.default_rng(0)
     for split in ("train", "validation"):
         np.save(tmp_path / f"{split}.npy", rng.integers(4, 64, 4000).astype(np.uint16))
+    (tmp_path / "meta.json").write_text(json.dumps({"vocab_size": TINY_MODEL.vocab_size}))
     return tmp_path
 
 
@@ -93,3 +95,17 @@ def test_schedule_warms_up_then_decays_to_the_floor():
     assert learning_rate_at(9, cfg) == pytest.approx(1e-3)
     assert learning_rate_at(99, cfg) == pytest.approx(1e-4, rel=0.02)
     assert learning_rate_at(50, cfg) < learning_rate_at(10, cfg)
+
+
+def test_vocabulary_size_is_taken_from_the_data(token_data, tmp_path):
+    """A model whose vocabulary disagrees with the data emits undecodable ids.
+
+    The failure surfaces only at generation time as a tokenizer crash, so the two
+    are tied together here instead of being left to agree by convention.
+    """
+    out = tmp_path / "run"
+
+    train(TINY_TRAIN, replace(TINY_MODEL, vocab_size=4096), token_data, out)
+
+    saved = json.loads((out / "config.json").read_text())
+    assert saved["model"]["vocab_size"] == TINY_MODEL.vocab_size

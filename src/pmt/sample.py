@@ -76,16 +76,19 @@ def generate(
     The state is what makes this cheap: each new token costs one LSTM step rather
     than a re-read of the whole prefix.
     """
-    logits, state = model(torch.tensor([prompt], device=device))
+    logits, state = model(torch.tensor([prompt], device=device), use_cache=True)
     next_logits = logits[0, -1]
 
+    limit = model.max_context
     produced: list[int] = []
     for _ in range(max_new_tokens):
+        if limit is not None and len(prompt) + len(produced) >= limit:
+            break  # a Transformer cannot see past its positional encoding
         token = pick_next(next_logits, temperature, top_k, banned)
         if token == eos_id:
             break
         produced.append(token)
-        logits, state = model(torch.tensor([[token]], device=device), state)
+        logits, state = model(torch.tensor([[token]], device=device), state, use_cache=True)
         next_logits = logits[0, -1]
     return produced
 
@@ -112,6 +115,14 @@ def main(argv: list[str] | None = None) -> None:
     device = resolve_device("auto")
     model, checkpoint = load_model(args.checkpoint, device)
     tokenizer = load_tokenizer(args.data / TOKENIZER_FILENAME)
+
+    trained_vocab = checkpoint["model_config"]["vocab_size"]
+    if trained_vocab != len(tokenizer):
+        raise ValueError(
+            f"checkpoint was trained on a {trained_vocab}-token vocabulary but "
+            f"{args.data.name} has {len(tokenizer)}. Generated ids would not decode - "
+            f"point --data at the dataset this checkpoint was trained on."
+        )
 
     special = json.loads((args.data / "meta.json").read_text())["special_tokens"]
     bos, eos = special["bos"], special["eos"]

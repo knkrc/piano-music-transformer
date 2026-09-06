@@ -16,6 +16,8 @@ from dataclasses import dataclass
 
 from torch import Tensor, nn
 
+from pmt.models.base import LanguageModel
+
 State = tuple[Tensor, Tensor]
 
 
@@ -38,7 +40,7 @@ class LSTMConfig:
             )
 
 
-class LSTMLanguageModel(nn.Module):
+class LSTMLanguageModel(LanguageModel):
     """Next-token model over REMI tokens."""
 
     def __init__(self, cfg: LSTMConfig) -> None:
@@ -57,23 +59,17 @@ class LSTMLanguageModel(nn.Module):
         if cfg.tie_weights:
             self.head.weight = self.embedding.weight
 
-    def forward(self, tokens: Tensor, state: State | None = None) -> tuple[Tensor, State]:
+    def forward(
+        self, tokens: Tensor, state: State | None = None, use_cache: bool = False
+    ) -> tuple[Tensor, State]:
         """Return ``(logits, state)``.
 
-        The returned state lets generation advance one token at a time without
-        replaying the whole prefix, which is what makes sampling cheap for an RNN.
+        ``use_cache`` is accepted for interface parity and ignored: recurrent state
+        is a fixed-size tensor the LSTM produces anyway, so there is nothing to save
+        by not returning it.
         """
         hidden, state = self.lstm(self.dropout(self.embedding(tokens)), state)
         return self.head(self.dropout(hidden)), state
-
-    def num_parameters(self, trainable_only: bool = True) -> int:
-        params = self.parameters()
-        if trainable_only:
-            params = (p for p in params if p.requires_grad)
-        seen: dict[int, Tensor] = {}
-        for param in params:
-            seen[id(param)] = param  # weight tying shares one tensor between two modules
-        return sum(param.numel() for param in seen.values())
 
 
 def build_lstm(cfg: LSTMConfig) -> LSTMLanguageModel:
