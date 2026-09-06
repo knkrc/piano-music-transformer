@@ -1,0 +1,38 @@
+# Data pipeline overrides. Anything omitted keeps the default from
+# src/pmt/config.py:DataConfig, which is the source of truth.
+#
+# This file exists to make the defaults visible and easy to fork, not because
+# the pipeline needs it - `python -m pmt.data.prepare` runs fine without it.
+
+# 88-key piano range (A0 to C8), matching MAESTRO.
+pitch_range: [21, 109]
+
+# [start_beat, end_beat, steps_per_beat].
+# 16 steps/beat over the first 4 beats -> ~8 ms timing error at 120 bpm, which is
+# below the threshold where rhythmic displacement is audible, and costs only ~3%
+# extra sequence length over 8 steps/beat. Notes longer than 4 beats do not need
+# that precision.
+beat_res:
+  - [0, 4, 16]
+  - [4, 12, 4]
+
+num_velocities: 32
+
+# MAESTRO is expressive performance data: pedal and tempo carry much of the
+# musicality that a fixed-grid one-hot encoding throws away.
+use_sustain_pedals: true
+use_tempos: true
+use_time_signatures: true
+
+# Chords and rests are derived events; REMI can express the same music without
+# them, and every extra event type costs vocabulary.
+use_chords: false
+use_rests: false
+
+# BPE merges frequent event n-grams, shortening sequences 2-4x so a 1024-token
+# context covers meaningfully more music.
+bpe_vocab_size: 4096
+bpe_training_files: 400
+
+block_size: 1024
+seed: 1337
