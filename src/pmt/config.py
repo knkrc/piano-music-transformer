@@ -48,6 +48,11 @@ class DataConfig:
     bpe_vocab_size: int = 4096
     bpe_training_files: int = 400
 
+    # Augmentation (training split only)
+    # 6 semitones each way -> 13 variants per piece. The corpus, not the model,
+    # is the binding constraint, so this is part of the pipeline rather than an extra.
+    augment_semitones: int = 6
+
     # Sequence assembly
     block_size: int = 1024
     seed: int = 1337
