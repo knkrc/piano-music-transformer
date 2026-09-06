@@ -43,6 +43,8 @@ important phase even though it looks like the most boring one.
 | `vocab_size` | Derived from the data's `meta.json`, never configured | A model and tokenizer that disagree produce ids that cannot be decoded, and it only surfaces at generation time |
 | Repetition penalty | Defaults to **off** (1.0) | Music *is* repetition — motifs, sequences, ostinati. The penalty that stops a language model looping suppresses the structure this model exists to learn |
 | MIDI prompts | Cut at a downbeat, not after N tokens | Hand the model whole bars and it picks up on a barline, the way a player would |
+| Metric reporting | Always beside a **reference column** measured on real MAESTRO | "Scale consistency 0.86" means nothing until you know the corpus scores 0.87 |
+| Undefined metrics | Aggregated as absent, never as zero | Averaging a silent sample in as a zero would flatter a model that produced nothing |
 
 **The audio release is never downloaded.** MAESTRO with audio is ~120 GB; only the
 58 MB MIDI archive is fetched.
@@ -106,8 +108,9 @@ piano-music-transformer/
       a MIDI file cut at a barline, and context sliding past `max_seq_len`. Code
       complete and tested; needs a trained model to judge. The KV cache moved to
       Phase 2 - see the log.
-- [ ] **Phase 4 — Evaluation.** Perplexity plus musical metrics, LSTM vs
-      Transformer table, rendered audio. *Done when the README has numbers and sound.*
+- [~] **Phase 4 — Evaluation.** Perplexity plus musical metrics, side-by-side table,
+      audio rendering. Code complete and tested; needs trained models to fill in.
+      *Done when the README has numbers and sound.*
 - [ ] **Phase 5 — Shop window.** Gradio demo, weights on the HF Hub, README with a
       Limitations section.
 - [ ] **Phase 6 (optional) — Control.** Chord conditioning or infilling.
@@ -258,3 +261,19 @@ stale rather than archiving it.
   - Trap, twice now: a `ruff format` pass between writing and patching a block makes
     text-matching edits miss silently. Verify by grepping for the old symbol, not by
     trusting the patch reported success.
+
+- **2026-09-06 — Phase 4 code complete.**
+  - Four musical metrics implemented in-repo (~120 lines) rather than pulling in
+    `muspy`: pitch-class entropy, scale consistency, groove consistency, note density.
+  - **Measured the reference values first**, on real MAESTRO performances: entropy
+    ~3.1-3.2 of a possible 3.58, scale consistency 0.82-0.93, groove 0.61-0.66, note
+    density 2.2-7.3 per beat. Every table this project prints carries that reference
+    column, because a generated "scale consistency 0.86" is unreadable without it.
+  - Useful floor to remember: a purely chromatic run already scores **7/12 = 0.583**
+    on scale consistency, since seven of twelve pitch classes fit any major scale.
+    Zero is not the baseline, 0.583 is. There is a test pinning this.
+  - Undefined metrics aggregate as absent rather than zero. A sample too short or too
+    empty to measure would otherwise average in as a good result.
+  - `evaluate.py` regenerates from every model with the same seed and the same
+    sampling settings. Varying either between models would make the table a
+    comparison of sampling choices rather than of models.
