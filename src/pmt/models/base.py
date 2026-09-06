@@ -34,6 +34,14 @@ class LanguageModel(nn.Module):
         """
         return None
 
+    def trim_state(self, state, window: int):
+        """Shorten the state so the attention window stays within ``window``.
+
+        An RNN's state is a fixed-size tensor with nothing to trim, so the default
+        returns it untouched.
+        """
+        return state
+
     def num_parameters(self, trainable_only: bool = True) -> int:
         params = self.parameters()
         if trainable_only:

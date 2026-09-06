@@ -67,12 +67,8 @@ def test_rope_scores_depend_only_on_relative_position(model):
     key = torch.randn(1, 1, 1, SMALL.head_dim)
 
     def score(at_query: int, at_key: int) -> float:
-        rotated_query = apply_rope(
-            query, model.rope_cos[at_query : at_query + 1], model.rope_sin[at_query : at_query + 1]
-        )
-        rotated_key = apply_rope(
-            key, model.rope_cos[at_key : at_key + 1], model.rope_sin[at_key : at_key + 1]
-        )
+        rotated_query = apply_rope(query, *model.rope_tables(at_query, 1))
+        rotated_key = apply_rope(key, *model.rope_tables(at_key, 1))
         return float((rotated_query * rotated_key).sum())
 
     assert score(3, 1) == pytest.approx(score(9, 7), abs=1e-5)
@@ -84,12 +80,10 @@ def test_rope_is_a_rotation(model):
     torch.manual_seed(0)
     vector = torch.randn(1, 1, 1, SMALL.head_dim)
 
-    rotated = apply_rope(vector, model.rope_cos[5:6], model.rope_sin[5:6])
+    rotated = apply_rope(vector, *model.rope_tables(5, 1))
 
     assert torch.allclose(rotated.norm(), vector.norm(), atol=1e-5)
-    assert torch.allclose(
-        apply_rope(vector, model.rope_cos[0:1], model.rope_sin[0:1]), vector, atol=1e-6
-    )
+    assert torch.allclose(apply_rope(vector, *model.rope_tables(0, 1)), vector, atol=1e-6)
 
 
 def test_no_cache_is_returned_unless_asked_for(model, tokens):
@@ -121,3 +115,27 @@ def test_the_two_models_are_matched_on_parameters():
 
     ratio = transformer.num_parameters() / lstm.num_parameters()
     assert 0.95 <= ratio <= 1.05, f"parameter budgets diverged: {ratio:.2f}x"
+
+
+def test_positions_may_run_past_the_training_window(model):
+    """Only the attention window is bounded; absolute positions are not.
+
+    A sliding cache keeps every query-key distance inside the trained range while
+    the positions themselves keep climbing, which is the property that lets
+    generation continue indefinitely.
+    """
+    cos, sin = model.rope_tables(SMALL.max_seq_len * 10, 4)
+
+    assert cos.shape == sin.shape == (4, SMALL.head_dim // 2)
+
+
+def test_trimming_drops_the_oldest_cache_entries(model, tokens):
+    with torch.no_grad():
+        _, state = model(tokens, use_cache=True)
+
+    position, caches = state
+    trimmed_position, trimmed_caches = model.trim_state(state, window=5)
+
+    assert trimmed_position == position  # positions keep advancing after a trim
+    assert trimmed_caches[0][0].size(2) == 5
+    assert torch.equal(trimmed_caches[0][0], caches[0][0][:, :, -5:])

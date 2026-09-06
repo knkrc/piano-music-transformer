@@ -41,6 +41,8 @@ important phase even though it looks like the most boring one.
 | Model comparison | Matched on **parameters** (8.65M vs 8.40M), not width or depth | The question is which architecture spends the same budget better; different sizes cannot answer it. There is a test enforcing this |
 | Learning rate | Each architecture's conventional default (LSTM 1e-3, Transformer 6e-4) | Forcing a shared value would suit one of them; tuning one and not the other is worse. Neither got a sweep, and the README says so |
 | `vocab_size` | Derived from the data's `meta.json`, never configured | A model and tokenizer that disagree produce ids that cannot be decoded, and it only surfaces at generation time |
+| Repetition penalty | Defaults to **off** (1.0) | Music *is* repetition — motifs, sequences, ostinati. The penalty that stops a language model looping suppresses the structure this model exists to learn |
+| MIDI prompts | Cut at a downbeat, not after N tokens | Hand the model whole bars and it picks up on a barline, the way a player would |
 
 **The audio release is never downloaded.** MAESTRO with audio is ~120 GB; only the
 58 MB MIDI archive is fetched.
@@ -100,9 +102,10 @@ piano-music-transformer/
 - [~] **Phase 2 — Transformer.** Decoder-only, RoPE, pre-norm RMSNorm, SwiGLU, SDPA,
       KV cache. Code complete and tested; waiting for the GPU. *Done when it beats
       the baseline on validation NLL.*
-- [ ] **Phase 3 — Sampling.** top-p and repetition penalty, **prompt continuation**
-      (give it 4 bars, it continues), context sliding past `max_seq_len`. The KV
-      cache moved to Phase 2 - see the log. The demo lives or dies here.
+- [~] **Phase 3 — Sampling.** top-p, repetition penalty, **prompt continuation** from
+      a MIDI file cut at a barline, and context sliding past `max_seq_len`. Code
+      complete and tested; needs a trained model to judge. The KV cache moved to
+      Phase 2 - see the log.
 - [ ] **Phase 4 — Evaluation.** Perplexity plus musical metrics, LSTM vs
       Transformer table, rendered audio. *Done when the README has numbers and sound.*
 - [ ] **Phase 5 — Shop window.** Gradio demo, weights on the HF Hub, README with a
@@ -232,3 +235,26 @@ stale rather than archiving it.
     no gain in fairness.
   - Next: train the Transformer on the same 12,000-step budget once the GPU frees up,
     and measure bf16 for it - the one decision from Phase 1 likely to flip.
+
+- **2026-09-06 — Phase 3 code complete, also written while the baseline trains.**
+  - **RoPE paid for itself.** Generation can now run past the 1024-token window by
+    dropping the oldest cache entries. That is safe *because* RoPE scores depend on
+    the distance between positions: a sliding window keeps every distance inside the
+    trained range while absolute positions climb without limit. Learned positional
+    embeddings would have hard-stopped at 1024. A test generates 40 tokens through a
+    16-token window.
+  - **Position had to move into the state.** It was inferred from the cache length,
+    which a sliding window shortens - positions would have run backwards. The
+    Transformer's state is now `(next_position, layer_caches)`, and RoPE tables are
+    computed per call instead of read from a table capped at `max_seq_len`.
+  - **Repetition penalty ships off by default**, and that is a judgement about music
+    rather than an oversight. Motifs, sequences and a held accompaniment figure are
+    the structure worth learning; the penalty that rescues a looping language model
+    would erase it. It stays available for a model that has collapsed onto one note.
+  - **MIDI prompts are cut at a downbeat**, using `Score.get_downbeats()`, rather
+    than after a token count. With BPE a bar boundary can sit inside a merged token,
+    so cutting the score before tokenizing is the only clean way to hand the model
+    whole bars.
+  - Trap, twice now: a `ruff format` pass between writing and patching a block makes
+    text-matching edits miss silently. Verify by grepping for the old symbol, not by
+    trusting the patch reported success.

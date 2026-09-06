@@ -28,7 +28,10 @@ from torch.nn import functional as F
 from pmt.models.base import LanguageModel
 
 LayerCache = tuple[Tensor, Tensor]
-Cache = tuple[LayerCache, ...]
+# (next absolute position, per-layer key/value caches). The position is carried
+# explicitly rather than inferred from the cache length, because a sliding window
+# shortens the cache while positions must keep advancing.
+Cache = tuple[int, tuple[LayerCache, ...]]
 
 
 @dataclass(slots=True)
@@ -173,9 +176,30 @@ class TransformerLanguageModel(LanguageModel):
         frequencies = 1.0 / (
             cfg.rope_base ** (torch.arange(0, cfg.head_dim, 2).float() / cfg.head_dim)
         )
-        angles = torch.outer(torch.arange(cfg.max_seq_len).float(), frequencies)
-        self.register_buffer("rope_cos", angles.cos(), persistent=False)
-        self.register_buffer("rope_sin", angles.sin(), persistent=False)
+        self.register_buffer("inverse_frequencies", frequencies, persistent=False)
+
+    def rope_tables(self, offset: int, length: int) -> tuple[Tensor, Tensor]:
+        """Rotation angles for absolute positions ``[offset, offset + length)``.
+
+        Computed per call rather than read from a fixed table so that positions may
+        run past ``max_seq_len``. Only the *window* is bounded, never the position:
+        RoPE scores depend on the distance between two positions, so a sliding
+        window keeps every distance inside the range the model was trained on even
+        as the absolute positions grow without limit.
+        """
+        positions = torch.arange(
+            offset, offset + length, device=self.inverse_frequencies.device, dtype=torch.float32
+        )
+        angles = torch.outer(positions, self.inverse_frequencies)
+        return angles.cos(), angles.sin()
+
+    def trim_state(self, state: Cache, window: int) -> Cache:
+        """Drop the oldest cache entries, keeping at most ``window`` of them."""
+        position, caches = state
+        if not caches or caches[0][0].size(2) <= window:
+            return state
+        trimmed = tuple((keys[:, :, -window:], values[:, :, -window:]) for keys, values in caches)
+        return position, trimmed
 
     @property
     def max_context(self) -> int:
@@ -185,23 +209,24 @@ class TransformerLanguageModel(LanguageModel):
         self, tokens: Tensor, state: Cache | None = None, use_cache: bool = False
     ) -> tuple[Tensor, Cache | None]:
         _, length = tokens.shape
-        offset = 0 if state is None else state[0][0].size(2)
-        if offset + length > self.cfg.max_seq_len:
+        offset, layer_caches = (0, None) if state is None else state
+        cached = 0 if layer_caches is None else layer_caches[0][0].size(2)
+        if cached + length > self.cfg.max_seq_len:
             raise ValueError(
-                f"sequence of {offset + length} exceeds max_seq_len={self.cfg.max_seq_len}"
+                f"attention window of {cached + length} exceeds "
+                f"max_seq_len={self.cfg.max_seq_len}; trim the cache first"
             )
 
-        cos = self.rope_cos[offset : offset + length]
-        sin = self.rope_sin[offset : offset + length]
-
+        cos, sin = self.rope_tables(offset, length)
         x = self.embedding_dropout(self.embedding(tokens))
         caches: list[LayerCache | None] = []
         for index, block in enumerate(self.blocks):
-            x, layer_cache = block(x, cos, sin, None if state is None else state[index], use_cache)
-            caches.append(layer_cache)
+            layer_cache = None if layer_caches is None else layer_caches[index]
+            x, updated = block(x, cos, sin, layer_cache, use_cache)
+            caches.append(updated)
 
         logits = self.head(self.norm(x))
-        return logits, (tuple(caches) if use_cache else None)
+        return logits, ((offset + length, tuple(caches)) if use_cache else None)
 
 
 def build_transformer(cfg: TransformerConfig) -> TransformerLanguageModel:
