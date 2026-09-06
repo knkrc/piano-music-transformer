@@ -92,7 +92,7 @@ Build the real thing (downloads MAESTRO on first run, a few minutes total):
 uv run python -m pmt.data.prepare
 ```
 
-Train the baseline (~5.5 h on an Apple M5; resumable at any point):
+Train the baseline (~10 h on an Apple M5; resumable at any point):
 
 ```bash
 uv run python -m pmt.train --config configs/lstm.yaml

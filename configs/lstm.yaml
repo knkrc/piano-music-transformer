@@ -11,8 +11,10 @@ train:
   grad_accum: 4
   block_size: 1024
   # 131.6M training tokens / 32,768 per step = 4,016 steps per epoch, so this is
-  # ~3 epochs (~5.5 h on an M5 at ~20k tokens/s). The Transformer in Phase 2 gets
-  # exactly this budget - an under-trained baseline would flatter it.
+  # ~3 epochs. Sustained throughput on an M5 is ~11k tokens/s (2.9 s/step), so this
+  # is ~10 hours - a short burst measures nearly twice that and does not hold up.
+  # The Transformer in Phase 2 gets exactly this budget; an under-trained baseline
+  # would flatter it.
   max_steps: 12000
 
   lr: 1.0e-3
