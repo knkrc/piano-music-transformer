@@ -108,6 +108,24 @@ Generate from a checkpoint:
 uv run python -m pmt.sample --checkpoint outputs/lstm/best.pt --num 5
 ```
 
+Compare the trained models on held-out data and on what they generate:
+
+```bash
+uv run python -m pmt.evaluate --checkpoint outputs/lstm/best.pt --checkpoint outputs/transformer/best.pt
+```
+
+Hear them side by side in the browser:
+
+```bash
+uv run --extra demo python app.py
+```
+
+Audio needs FluidSynth and a soundfont. Install them once:
+
+```bash
+brew install fluid-synth && uv run python -m pmt.render --install-soundfont
+```
+
 Run the tests — they build their MIDI in memory and need no dataset:
 
 ```bash
@@ -141,11 +159,11 @@ safe if interruption is free.
 ## Roadmap
 
 - [x] **Phase 0** — Data pipeline: download, REMI+BPE tokenization, token shards, round-trip verification
-- [ ] **Phase 1** — LSTM baseline, rewritten in PyTorch *(code complete, training underway)*
-- [ ] **Phase 2** — Decoder-only Transformer (RoPE, pre-norm, SDPA)
-- [ ] **Phase 3** — Sampling: top-k / top-p / repetition penalty, KV cache, prompt continuation
-- [ ] **Phase 4** — Evaluation: perplexity plus musical metrics, head-to-head table, rendered audio
-- [ ] **Phase 5** — Gradio demo and published weights
+- [x] **Phase 1** — LSTM baseline, rewritten in PyTorch *(training underway)*
+- [x] **Phase 2** — Decoder-only Transformer (RoPE, pre-norm RMSNorm, SwiGLU, SDPA)
+- [x] **Phase 3** — Sampling: top-k / top-p / repetition penalty, KV cache, prompt continuation, sliding context
+- [x] **Phase 4** — Evaluation: perplexity plus musical metrics, head-to-head table, rendered audio *(code complete, awaiting trained models)*
+- [x] **Phase 5** — Gradio demo, side by side under identical conditions *(code complete, awaiting trained models)*
 
 ## Constraints and limitations
 

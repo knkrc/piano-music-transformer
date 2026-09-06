@@ -45,6 +45,8 @@ important phase even though it looks like the most boring one.
 | MIDI prompts | Cut at a downbeat, not after N tokens | Hand the model whole bars and it picks up on a barline, the way a player would |
 | Metric reporting | Always beside a **reference column** measured on real MAESTRO | "Scale consistency 0.86" means nothing until you know the corpus scores 0.87 |
 | Undefined metrics | Aggregated as absent, never as zero | Averaging a silent sample in as a zero would flatter a model that produced nothing |
+| Demo layout | Both models side by side, one prompt, one seed | A single-model generator is a toy; the comparison *is* the project, and it should be heard rather than read |
+| `gradio` | An optional extra, not a dependency | Nothing in the training or evaluation path needs it, and it is a large tree |
 
 **The audio release is never downloaded.** MAESTRO with audio is ~120 GB; only the
 58 MB MIDI archive is fetched.
@@ -111,8 +113,9 @@ piano-music-transformer/
 - [~] **Phase 4 — Evaluation.** Perplexity plus musical metrics, side-by-side table,
       audio rendering. Code complete and tested; needs trained models to fill in.
       *Done when the README has numbers and sound.*
-- [ ] **Phase 5 — Shop window.** Gradio demo, weights on the HF Hub, README with a
-      Limitations section.
+- [~] **Phase 5 — Shop window.** Gradio demo comparing both models side by side under
+      identical conditions; README with a Limitations section. Weights on the HF Hub
+      still to do. *Code complete; needs trained models.*
 - [ ] **Phase 6 (optional) — Control.** Chord conditioning or infilling.
 
 Phases 0-4 make a finished project. Phase 5 makes it a visible one.
@@ -277,3 +280,19 @@ stale rather than archiving it.
   - `evaluate.py` regenerates from every model with the same seed and the same
     sampling settings. Varying either between models would make the table a
     comparison of sampling choices rather than of models.
+
+- **2026-09-06 — Phase 5 demo complete.**
+  - The demo generates from **both models at once**, same prompt, same seed, same
+    settings, rendered to audio side by side. A single-model generator would be a
+    toy; this lets someone hear the comparison instead of reading a table of it.
+  - The interface lives in `pmt.demo`; `app.py` at the root is the three-line entry
+    point Spaces expects. Putting it only at the root made it unimportable under the
+    `src/` layout, so the tests could not reach it.
+  - Checked against the partially-trained baseline (step ~4,000, val 4.35) and the
+    whole chain runs: generate -> MIDI -> MP3 -> metrics beside the corpus. The
+    numbers already read sensibly - the model is **sparser** (1.33 vs 5.26 notes per
+    beat), **less tonal** (0.78 vs 0.84) and **more mechanical** (groove 0.79 vs
+    0.66) than real playing. Exactly the profile a third-trained model should have,
+    which is some evidence the metrics measure what they claim.
+  - `gradio` is an optional extra. Installing it touched no package the running
+    training depended on, which was checked with `uv sync --dry-run` first.
