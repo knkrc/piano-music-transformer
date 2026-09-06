@@ -35,6 +35,11 @@ MODELS = {
     "transformer": (TransformerConfig, build_transformer),
 }
 
+# Config names mapped to dtypes explicitly. Deriving them with getattr(torch, name)
+# looks tidy and silently accepts "bf16", which torch spells "bfloat16" - a crash
+# that only appears the first time a run is not fp32.
+PRECISIONS = {"fp32": None, "bf16": torch.bfloat16, "fp16": torch.float16}
+
 
 @dataclass(slots=True)
 class TrainConfig:
@@ -91,9 +96,12 @@ def learning_rate_at(step: int, cfg: TrainConfig) -> float:
 
 
 def autocast_for(device: torch.device, precision: str):
-    if precision == "fp32":
+    if precision not in PRECISIONS:
+        raise ValueError(f"unknown precision {precision!r}; expected one of {sorted(PRECISIONS)}")
+    dtype = PRECISIONS[precision]
+    if dtype is None:
         return contextlib.nullcontext()
-    return torch.autocast(device.type, dtype=getattr(torch, precision))
+    return torch.autocast(device.type, dtype=dtype)
 
 
 def cross_entropy(logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:

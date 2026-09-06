@@ -8,9 +8,8 @@ course. The interesting question was not "can a Transformer do it better", but
 **where the original approach actually loses information** — and the answer turned
 out to be the representation, not the architecture.
 
-> **Status: Phase 1 of 5 in progress.** The data pipeline is built and verified and
-> the LSTM baseline trains end to end; its full run is underway. No results are
-> claimed here until they exist. Roadmap below.
+> **Status: the baseline is trained; the Transformer is training now.** Everything
+> through Phase 5 is built. The head-to-head table lands when the second run finishes.
 
 ---
 
@@ -29,6 +28,47 @@ MIDI ──► REMI tokens ──► decoder-only Transformer ──► sampling
 
 Both models share one pipeline, one tokenizer and one evaluation protocol, so the
 comparison between them means something.
+
+## The baseline, trained
+
+12,000 steps (~3 epochs of the augmented corpus, ~10 hours on an Apple M5).
+
+| | |
+|---|---|
+| Validation loss | **4.085** (perplexity 59.5) |
+| Test perplexity | **58.2** |
+| Parameters | 8.40M |
+
+Validation loss was still falling at the last step and the train/validation gap
+stayed small (3.95 vs 4.09), so this model is limited by its budget rather than by
+overfitting. Listen: [`samples/`](samples/).
+
+### What the notes look like
+
+| Metric | LSTM | Real MAESTRO |
+|---|---|---|
+| Pitch-class entropy | 2.89 | 3.24 |
+| Scale consistency | **0.87** | 0.81 |
+| Groove consistency | **0.72** | 0.63 |
+| Note density | 2.03 | 5.08 |
+| Pitch range | 47.2 | 63.1 |
+
+The interesting part is the direction of the errors. The model is *more* diatonic
+and *more* rhythmically regular than the music it learned from, while being far
+sparser and narrower. It has found the safe middle of the distribution: a
+plausible, well-behaved average of a MAESTRO performance, with the chromaticism,
+rubato and density that make an actual performance interesting sanded off. That is
+what a small model underfitting a large corpus looks like, and no amount of
+sampling tuning fixes it.
+
+### It does not always know how to start
+
+Nine of twenty unprompted samples stop early — four of them within 90 tokens.
+Trained on a stream where pieces are separated by begin- and end-of-sequence
+tokens, the model learned that pieces end, and from a cold start it reaches for
+that too eagerly. Given four bars to continue, this does not happen: prompted
+generation ran the full budget every time. Worth knowing before judging the
+unprompted samples.
 
 ## What is verified so far
 

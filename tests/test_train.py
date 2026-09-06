@@ -11,7 +11,7 @@ import torch
 
 from pmt.data.dataset import TokenWindowDataset, deterministic_batch, evaluation_batches
 from pmt.models.lstm import LSTMConfig
-from pmt.train import TrainConfig, learning_rate_at, train
+from pmt.train import TrainConfig, autocast_for, learning_rate_at, train
 
 TINY_TRAIN = TrainConfig(
     batch_size=2,
@@ -109,3 +109,19 @@ def test_vocabulary_size_is_taken_from_the_data(token_data, tmp_path):
 
     saved = json.loads((out / "config.json").read_text())
     assert saved["model"]["vocab_size"] == TINY_MODEL.vocab_size
+
+
+@pytest.mark.parametrize("precision", ["fp32", "bf16", "fp16"])
+def test_every_configured_precision_resolves(precision):
+    """A wrong precision name used to surface only on the first non-fp32 run.
+
+    `getattr(torch, "bf16")` reads as if it works and does not: torch spells it
+    `bfloat16`. The names live in a table now, and this walks all of them.
+    """
+    with autocast_for(torch.device("cpu"), precision):
+        pass
+
+
+def test_an_unknown_precision_is_rejected_immediately():
+    with pytest.raises(ValueError, match="unknown precision"):
+        autocast_for(torch.device("cpu"), "float8")

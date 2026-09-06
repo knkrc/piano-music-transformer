@@ -31,9 +31,12 @@ train:
 
   seed: 1337
   device: auto
-  # To be measured once the GPU is free. bf16 bought only ~7% for the LSTM, but
-  # attention and the feed-forward are matmul-bound, so this should differ.
-  precision: fp32
+  # Measured on an M5: +22.1% over fp32, against +7% for the LSTM - attention and
+  # the feed-forward are matmul-bound in a way the recurrent path is not. Loss
+  # agreed with fp32 to 0.0002 over the same 12 steps, so this buys time without
+  # changing what is learned. Autocast keeps parameters in fp32; only the matmuls
+  # are reduced, which cannot flatter this model against the fp32 baseline.
+  precision: bf16
 
 model:
   # ~8.65M parameters against the baseline's 8.40M. Matched on parameters rather
