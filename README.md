@@ -181,6 +181,12 @@ Compare the trained models on held-out data and on what they generate:
 uv run python -m pmt.evaluate --checkpoint outputs/lstm/best.pt --checkpoint outputs/transformer/best.pt
 ```
 
+Package the trained weights for publication (inference-only, safetensors):
+
+```bash
+uv run --extra hub python -m pmt.export
+```
+
 Hear them side by side in the browser:
 
 ```bash

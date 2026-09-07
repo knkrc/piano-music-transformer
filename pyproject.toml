@@ -20,6 +20,8 @@ dependencies = [
 # and nothing in the training or evaluation path needs it.
 [project.optional-dependencies]
 demo = ["gradio>=5.0"]
+# Publishing weights to the Hub. Not needed to train, evaluate or generate.
+hub = ["safetensors>=0.4", "huggingface-hub>=0.26"]
 
 [dependency-groups]
 dev = ["pytest>=8.0", "ruff>=0.9"]
