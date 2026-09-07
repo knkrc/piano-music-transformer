@@ -9,6 +9,8 @@ course. The interesting question was not "can a Transformer do it better", but
 out to be the representation, not the architecture.
 
 > **Status: complete.** Both models trained, compared and rendered. Results below.
+>
+> Weights: [huggingface.co/knkrc26/piano-music-transformer](https://huggingface.co/knkrc26/piano-music-transformer)
 
 ---
 
@@ -179,6 +181,18 @@ Compare the trained models on held-out data and on what they generate:
 
 ```bash
 uv run python -m pmt.evaluate --checkpoint outputs/lstm/best.pt --checkpoint outputs/transformer/best.pt
+```
+
+Use the published weights instead of training your own:
+
+```bash
+uv run --extra hub hf download knkrc26/piano-music-transformer --local-dir weights
+```
+
+Or package your own for publication (inference-only, safetensors):
+
+```bash
+uv run --extra hub python -m pmt.export
 ```
 
 Hear them side by side in the browser:
