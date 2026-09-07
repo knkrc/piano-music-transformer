@@ -32,7 +32,7 @@ important phase even though it looks like the most boring one.
 | Engineering level | Plain and tested | No Docker, no CI, no config framework. Clean, readable, working |
 | Framework | PyTorch | — |
 | Tokenizer | MidiTok REMI + BPE | Not hand-rolled, but verified by a round-trip test |
-| Metrics | Implemented in-repo | `muspy` is a fragile dependency; the 3-4 metrics we need are ~60 lines |
+| Metrics | Implemented in-repo | `muspy` is a fragile dependency; four metrics came to ~120 lines |
 | Package name | `pmt` | Matches the repo name `piano-music-transformer` |
 | Language | English everywhere | Public portfolio repo — code, comments, docs, commits |
 | Augmentation | Offline, transposition, train split only | BPE merges several events into one token, so pitch cannot be shifted on ids after the fact |
@@ -47,6 +47,9 @@ important phase even though it looks like the most boring one.
 | Undefined metrics | Aggregated as absent, never as zero | Averaging a silent sample in as a zero would flatter a model that produced nothing |
 | Demo layout | Both models side by side, one prompt, one seed | A single-model generator is a toy; the comparison *is* the project, and it should be heard rather than read |
 | `gradio` | An optional extra, not a dependency | Nothing in the training or evaluation path needs it, and it is a large tree |
+| Published weights | safetensors, inference-only, in a `hub` extra | A published model is exactly where "loading this cannot execute code" matters; optimizer state is 55 MB nobody needs |
+| Tokenised MAESTRO | **Never redistributed** | The token stream is a derivative of a CC BY-NC-SA dataset. The hosted demo ships pre-measured reference *numbers* instead |
+| Hosted Space | Prepared, not deployed | Hugging Face requires PRO for a Gradio Space; free `cpu-basic` is static-only. Files and commands are in `space/` |
 
 **The audio release is never downloaded.** MAESTRO with audio is ~120 GB; only the
 58 MB MIDI archive is fetched.
@@ -55,9 +58,12 @@ important phase even though it looks like the most boring one.
 
 Apple M5, 16 GB unified memory, MPS backend.
 
-- Model budget: **~20-30M parameters**, context **1024 tokens**, 8 layers / d_model 512
+- Model budget: **8.4M / 8.65M parameters**, context **1024 tokens**. The original
+  plan said 20-30M; Phase 0 measured the corpus and Phase 1 halved it again — see
+  the log
 - Effective batch size comes from gradient accumulation; physical batch follows memory
-- Try `torch.autocast("mps", bfloat16)`; **fall back to fp32** on NaN or kernel errors, and record it here
+- bf16 is worth it for the Transformer and not for the LSTM; both were measured, and
+  the burst figures over-promised against the sustained ones
 - `torch.compile` stays **off** by default (flaky on MPS); enabling it is opt-in
 - Every training run must be **resumable** (optimizer, scheduler and RNG state included) — overnight training is the working model
 - Expect training time in hours, not minutes, and **measure it over hours, not minutes**.
@@ -76,49 +82,48 @@ These were discussed and rejected. If one comes back, it comes back with a reaso
 ```
 piano-music-transformer/
 ├── CLAUDE.md              # this file
-├── README.md              # English, the shop window
-├── pyproject.toml
-├── configs/
-│   └── data.yaml          # visible copy of the data defaults
+├── README.md              # the shop window
+├── app.py                 # Space entry point; the interface lives in pmt.demo
+├── requirements.txt       # for a hosted Space: installs this project from GitHub
+├── configs/               # lstm.yaml, transformer.yaml, data.yaml
+├── samples/               # four matched pairs, committed
+├── space/                 # Space card and deployment instructions
 ├── src/pmt/
 │   ├── config.py          # dataclasses + YAML loader
-│   ├── data/
-│   │   ├── download.py   # MAESTRO, MIDI only
-│   │   ├── tokenizer.py  # REMI build / encode / decode / merge
-│   │   ├── augment.py    # transposition, train split only
-│   │   ├── prepare.py    # entry point: download -> BPE -> shards -> report
-│   │   └── dataset.py    # windows + deterministic batching
-│   ├── models/
-│   │   └── lstm.py       # the baseline, ~8.4M params with tied weights
-│   ├── train.py          # one loop, shared by every model
-│   └── sample.py         # generation + degenerate-output diagnostics
-└── tests/
+│   ├── train.py           # one loop, shared by both models
+│   ├── sample.py          # generation: top-k/p, penalty, sliding context
+│   ├── evaluate.py        # the head-to-head table
+│   ├── metrics.py         # four musical metrics
+│   ├── render.py          # MIDI -> audio, dynamics preserved
+│   ├── export.py          # package checkpoints for publication
+│   ├── demo.py            # Gradio, both models side by side
+│   ├── models/            # base.py, lstm.py, transformer.py
+│   └── data/              # download, tokenizer, augment, prepare, dataset
+└── tests/                 # 94, none touching the dataset
 ```
 
 ## 6. Phases and status
 
-- [x] **Phase 0 — Skeleton and data pipeline.** Packaging, MAESTRO download, REMI+BPE
-      tokenization, `.npy` shards per split, **round-trip test**. *Done when
-      `python -m pmt.data.prepare` runs and the suite is green.*
-- [x] **Phase 1 — LSTM baseline.** Augmentation, model, training loop with exact
-      resume, sampling. Code complete and tested; the 12,000-step run is in flight.
-      *Done when it produces a MIDI file worth listening to.*
-- [x] **Phase 2 — Transformer.** Decoder-only, RoPE, pre-norm RMSNorm, SwiGLU, SDPA,
-      KV cache. Code complete and tested; waiting for the GPU. *Done when it beats
-      the baseline on validation NLL.*
-- [x] **Phase 3 — Sampling.** top-p, repetition penalty, **prompt continuation** from
-      a MIDI file cut at a barline, and context sliding past `max_seq_len`. Code
-      complete and tested; needs a trained model to judge. The KV cache moved to
-      Phase 2 - see the log.
-- [x] **Phase 4 — Evaluation.** Perplexity plus musical metrics, side-by-side table,
-      audio rendering. Code complete and tested; needs trained models to fill in.
-      *Done when the README has numbers and sound.*
-- [x] **Phase 5 — Shop window.** Gradio demo comparing both models side by side under
-      identical conditions; README with a Limitations section. Weights on the HF Hub
-      still to do. *Code complete; needs trained models.*
+All shipped. What each phase turned out to mean, rather than what it was planned to:
+
+- [x] **Phase 0 — Data pipeline.** REMI+BPE tokenization verified by round-trip:
+      nothing is ever lost but quantisation, and the time resolution was chosen by
+      measuring it.
+- [x] **Phase 1 — LSTM baseline.** Test perplexity 58.2. Brought transposition
+      augmentation forward from "nice to have" once Phase 0 showed the corpus, not
+      the parameter count, was binding.
+- [x] **Phase 2 — Transformer.** Test perplexity 31.9, 45% below the baseline on an
+      identical budget. Forced the KV cache forward from Phase 3.
+- [x] **Phase 3 — Sampling.** top-p, repetition penalty (off by default), MIDI
+      priming cut at a barline, sliding context past the attention window.
+- [x] **Phase 4 — Evaluation.** Four musical metrics, always beside a reference
+      column measured on real MAESTRO.
+- [x] **Phase 5 — Shop window.** Gradio demo, published weights on the Hub, README
+      with limitations. The Space is prepared but needs a PRO account.
 - [ ] **Phase 6 (optional) — Control.** Chord conditioning or infilling.
 
-Phases 0-4 make a finished project. Phase 5 makes it a visible one.
+Open if it is ever picked up again: multiple seeds for error bars, a learning-rate
+sweep for both models, and a hosted Space.
 
 ## 7. Code conventions
 
@@ -143,12 +148,16 @@ A comparison only means something under these conditions, so they hold every tim
 - 20 samples per model, **same seed and same sampling settings**
 - Listening does not replace metrics and metrics do not replace listening — the README carries both
 
-## 9. Known limits (these go in the README too)
+## 9. Known limits (these are in the README too)
 
-- At this scale the model is **locally coherent, structurally weak**; it drifts after ~30 s
+- **One run per model, no error bars.** The perplexity gap is far too large to be
+  seed noise; the musical-metric differences may well not be
+- Both models are **locally coherent and structurally weak** — convincing phrases, no
+  long-range musical form
 - Solo piano only, no stylistic range
-- 12.6M training tokens: the corpus, not the parameter count, is the binding constraint.
-  Augmentation matters more than model size here
+- Augmentation is transposition alone: it multiplies the data without adding one new
+  musical idea, which is a ceiling on what any of this can learn
+- Neither model got a hyperparameter sweep
 - Stating these plainly makes the project more credible, not less
 
 ## 10. How to update this file
