@@ -201,6 +201,12 @@ Hear them side by side in the browser:
 uv run --extra demo python app.py
 ```
 
+The same interface can be hosted on a Hugging Face Space — see
+[`space/DEPLOY.md`](space/DEPLOY.md). It needs a PRO account, and the local version
+is the better one anyway: it can also continue a real MAESTRO excerpt, which a
+hosted Space cannot, since publishing the tokenised dataset would redistribute
+CC BY-NC-SA data.
+
 Audio needs FluidSynth and a soundfont. Install them once:
 
 ```bash
