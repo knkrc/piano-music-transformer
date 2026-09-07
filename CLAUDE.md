@@ -100,20 +100,20 @@ piano-music-transformer/
 - [x] **Phase 0 — Skeleton and data pipeline.** Packaging, MAESTRO download, REMI+BPE
       tokenization, `.npy` shards per split, **round-trip test**. *Done when
       `python -m pmt.data.prepare` runs and the suite is green.*
-- [~] **Phase 1 — LSTM baseline.** Augmentation, model, training loop with exact
+- [x] **Phase 1 — LSTM baseline.** Augmentation, model, training loop with exact
       resume, sampling. Code complete and tested; the 12,000-step run is in flight.
       *Done when it produces a MIDI file worth listening to.*
-- [~] **Phase 2 — Transformer.** Decoder-only, RoPE, pre-norm RMSNorm, SwiGLU, SDPA,
+- [x] **Phase 2 — Transformer.** Decoder-only, RoPE, pre-norm RMSNorm, SwiGLU, SDPA,
       KV cache. Code complete and tested; waiting for the GPU. *Done when it beats
       the baseline on validation NLL.*
-- [~] **Phase 3 — Sampling.** top-p, repetition penalty, **prompt continuation** from
+- [x] **Phase 3 — Sampling.** top-p, repetition penalty, **prompt continuation** from
       a MIDI file cut at a barline, and context sliding past `max_seq_len`. Code
       complete and tested; needs a trained model to judge. The KV cache moved to
       Phase 2 - see the log.
-- [~] **Phase 4 — Evaluation.** Perplexity plus musical metrics, side-by-side table,
+- [x] **Phase 4 — Evaluation.** Perplexity plus musical metrics, side-by-side table,
       audio rendering. Code complete and tested; needs trained models to fill in.
       *Done when the README has numbers and sound.*
-- [~] **Phase 5 — Shop window.** Gradio demo comparing both models side by side under
+- [x] **Phase 5 — Shop window.** Gradio demo comparing both models side by side under
       identical conditions; README with a Limitations section. Weights on the HF Hub
       still to do. *Code complete; needs trained models.*
 - [ ] **Phase 6 (optional) — Control.** Chord conditioning or infilling.
@@ -296,3 +296,36 @@ stale rather than archiving it.
     which is some evidence the metrics measure what they claim.
   - `gradio` is an optional extra. Installing it touched no package the running
     training depended on, which was checked with `uv sync --dry-run` first.
+
+- **2026-09-07 — Both models trained. Phases 0-5 done.**
+  - **Transformer 31.9 test perplexity against the LSTM's 58.2** — 45% lower on an
+    identical budget. It passed the baseline's *final* score around step 2,000, one
+    sixth of the way through its own run. Neither model overfitted; both were still
+    improving when the budget ran out.
+  - **The musical metrics did not follow.** A 45% cut in perplexity bought a split
+    decision: the Transformer sits closer to the corpus on scale consistency (0.85 vs
+    0.91, corpus 0.81) and groove (0.71 vs 0.75, corpus 0.63), the LSTM on note density
+    (2.30 vs 1.69, corpus 5.08) and pitch range, and they are identical on pitch-class
+    entropy. **Better next-token prediction is not the same thing as better music**, and
+    this is the most interesting result the project produced. Both models drift the same
+    way: more diatonic, more regular, a third of the note density, a narrower keyboard —
+    the safe middle of the distribution.
+  - **bf16's benchmark advantage did not survive the run.** It measured +22% over fp32
+    in a 12-step burst; sustained, the Transformer averaged 12,877 tok/s against the
+    LSTM's 11,470 - about 12%, and the two runs took roughly the same wall clock. Third
+    time a short measurement over-promised. The decision still stands (loss identical,
+    never slower), but the *reason* given for it was overstated.
+  - **Bug: `evaluate()` forced the model back into train mode.** Correct inside the
+    training loop, corrupting anywhere else - a caller that evaluated and then sampled
+    generated with dropout live. It surfaced only because MPS refuses dropout in
+    `scaled_dot_product_attention`; on CPU it would have quietly produced worse samples
+    for the rest of the project. `evaluate()` now restores the mode it found, and
+    `generate()` forces eval regardless of what the caller left on. Both have tests.
+  - **Bug: `getattr(torch, "bf16")`.** Torch spells it `bfloat16`. Every run until the
+    Transformer had been fp32, so nothing exercised it and the first bf16 launch died at
+    startup. Precision names live in a table now.
+  - **Cold machines are faster.** The same run measured 2.81 s/step warm, 2.46 s/step
+    after an overnight sleep, and 2.99 s/step again once hot. Any timing claim in this
+    project needs to say what thermal state it was measured in.
+  - Remaining, if it is ever picked up again: weights on the HF Hub, a hosted Space,
+    multiple seeds for error bars, and a learning-rate sweep for both models.

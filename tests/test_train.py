@@ -10,8 +10,8 @@ import pytest
 import torch
 
 from pmt.data.dataset import TokenWindowDataset, deterministic_batch, evaluation_batches
-from pmt.models.lstm import LSTMConfig
-from pmt.train import TrainConfig, autocast_for, learning_rate_at, train
+from pmt.models.lstm import LSTMConfig, build_lstm
+from pmt.train import TrainConfig, autocast_for, evaluate, learning_rate_at, train
 
 TINY_TRAIN = TrainConfig(
     batch_size=2,
@@ -125,3 +125,20 @@ def test_every_configured_precision_resolves(precision):
 def test_an_unknown_precision_is_rejected_immediately():
     with pytest.raises(ValueError, match="unknown precision"):
         autocast_for(torch.device("cpu"), "float8")
+
+
+@pytest.mark.parametrize("started_training", [True, False])
+def test_evaluation_restores_the_mode_it_found(token_data, started_training):
+    """Forcing train mode back on works inside the loop and corrupts everyone else.
+
+    A caller that evaluates a model and then samples from it would generate with
+    dropout still live - silently wrong on CPU, and a hard crash on MPS, where
+    scaled_dot_product_attention refuses dropout.
+    """
+    model = build_lstm(TINY_MODEL)
+    model.train(started_training)
+    dataset = TokenWindowDataset(token_data / "validation.npy", 32)
+
+    evaluate(model, evaluation_batches(dataset, 2, 1), torch.device("cpu"), "fp32")
+
+    assert model.training is started_training

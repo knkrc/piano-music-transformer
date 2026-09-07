@@ -184,3 +184,41 @@ def test_a_midi_prompt_is_cut_at_a_barline(make_score, tmp_path, bars):
 
     notes = decode_to_score(tokenizer, ids).tracks[0].notes
     assert len(notes) == bars * 8  # eight eighth-notes to the bar
+
+
+def test_sampling_ignores_dropout_left_switched_on():
+    """Generation must not depend on the mode the caller happened to leave behind."""
+    config = TransformerConfig(
+        vocab_size=VOCAB,
+        d_model=32,
+        n_heads=2,
+        n_layers=2,
+        ffn_hidden=64,
+        max_seq_len=32,
+        dropout=0.5,
+    )
+    model = build_transformer(config)
+
+    model.eval()
+    from_eval = generate(
+        model,
+        [1],
+        8,
+        SamplingSettings(temperature=0.0),
+        banned=[],
+        eos_id=NEVER,
+        device=torch.device("cpu"),
+    )
+    model.train()
+    from_train = generate(
+        model,
+        [1],
+        8,
+        SamplingSettings(temperature=0.0),
+        banned=[],
+        eos_id=NEVER,
+        device=torch.device("cpu"),
+    )
+
+    assert from_eval == from_train
+    assert model.training is True  # and the caller's mode is handed back untouched

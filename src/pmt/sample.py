@@ -146,6 +146,23 @@ def generate(
     every distance inside the range the model was trained on, however far the
     absolute positions travel.
     """
+    was_training = model.training
+    model.eval()  # dropout during sampling is never wanted, whatever the caller left on
+    try:
+        return _generate(model, prompt, max_new_tokens, settings, banned, eos_id, device)
+    finally:
+        model.train(was_training)
+
+
+def _generate(
+    model: LanguageModel,
+    prompt: list[int],
+    max_new_tokens: int,
+    settings: SamplingSettings,
+    banned: Sequence[int],
+    eos_id: int,
+    device: torch.device,
+) -> list[int]:
     window = model.max_context
     if window is not None and len(prompt) > window:
         prompt = prompt[-window:]

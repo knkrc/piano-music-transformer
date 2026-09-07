@@ -112,7 +112,14 @@ def cross_entropy(logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
 
 @torch.no_grad()
 def evaluate(model: nn.Module, batches, device: torch.device, precision: str) -> float:
-    """Mean loss per token over a fixed set of windows, in nats."""
+    """Mean loss per token over a fixed set of windows, in nats.
+
+    The model is restored to the mode it arrived in rather than forced back to
+    training. Forcing it works inside the training loop and quietly corrupts any
+    caller that evaluates a model it then samples from - dropout would still be
+    live during generation.
+    """
+    was_training = model.training
     model.eval()
     total_loss = 0.0
     total_tokens = 0
@@ -122,7 +129,7 @@ def evaluate(model: nn.Module, batches, device: torch.device, precision: str) ->
             logits, _ = model(inputs)
         total_loss += cross_entropy(logits, targets).item() * targets.numel()
         total_tokens += targets.numel()
-    model.train()
+    model.train(was_training)
     return total_loss / max(1, total_tokens)
 
 
