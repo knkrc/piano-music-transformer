@@ -1,0 +1,46 @@
+# LSTM baseline: the original Coursera architecture on a modern pipeline.
+# It exists to be beaten by the Transformer in Phase 2, under identical
+# conditions - same tokenizer, same data order, same optimiser, same evaluation.
+
+train:
+  model: lstm
+
+  # 8 x 4 x 1024 = 32,768 tokens per step. batch_size is what fits comfortably in
+  # 16 GB of unified memory; grad_accum buys the effective batch back.
+  batch_size: 8
+  grad_accum: 4
+  block_size: 1024
+  # 131.6M training tokens / 32,768 per step = 4,016 steps per epoch, so this is
+  # ~3 epochs. Sustained throughput on an M5 is ~11k tokens/s (2.9 s/step), so this
+  # is ~10 hours - a short burst measures nearly twice that and does not hold up.
+  # The Transformer in Phase 2 gets exactly this budget; an under-trained baseline
+  # would flatter it.
+  max_steps: 12000
+
+  lr: 1.0e-3
+  min_lr_ratio: 0.1
+  warmup_steps: 200
+  weight_decay: 0.01
+  grad_clip: 1.0
+
+  log_every: 25
+  eval_every: 500
+  eval_batches: 40
+  save_every: 500
+
+  seed: 1337
+  device: auto
+  # Measured on an M5: bf16 buys ~7% here because the recurrent path is not
+  # matmul-bound. Not worth the numerical risk for the baseline.
+  precision: fp32
+
+model:
+  d_model: 512
+  hidden_size: 512
+  num_layers: 3
+  # The corpus is small relative to the model, so regularisation matters more
+  # than capacity does.
+  dropout: 0.2
+  # Ties the output projection to the embedding: 10.5M params -> 8.4M, and the
+  # two representations of a token stay consistent.
+  tie_weights: true

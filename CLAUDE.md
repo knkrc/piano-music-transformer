@@ -35,6 +35,9 @@ important phase even though it looks like the most boring one.
 | Metrics | Implemented in-repo | `muspy` is a fragile dependency; the 3-4 metrics we need are ~60 lines |
 | Package name | `pmt` | Matches the repo name `piano-music-transformer` |
 | Language | English everywhere | Public portfolio repo — code, comments, docs, commits |
+| Augmentation | Offline, transposition, train split only | BPE merges several events into one token, so pitch cannot be shifted on ids after the fact |
+| Batching | Step-indexed deterministic sampling, no `DataLoader` | Makes resume *exact* rather than approximate; memmap reads are microseconds, so there is nothing to prefetch |
+| Training budget | 12,000 steps (~3 epochs, ~5.5 h) | Phase 2 gets the identical budget — an under-trained baseline would flatter the Transformer |
 
 **The audio release is never downloaded.** MAESTRO with audio is ~120 GB; only the
 58 MB MIDI archive is fetched.
@@ -69,11 +72,16 @@ piano-music-transformer/
 │   └── data.yaml          # visible copy of the data defaults
 ├── src/pmt/
 │   ├── config.py          # dataclasses + YAML loader
-│   └── data/
-│       ├── download.py    # MAESTRO, MIDI only
-│       ├── tokenizer.py   # REMI build / encode / decode / merge
-│       ├── prepare.py     # entry point: download -> BPE -> shards -> report
-│       └── dataset.py     # strided windows over the token stream
+│   ├── data/
+│   │   ├── download.py   # MAESTRO, MIDI only
+│   │   ├── tokenizer.py  # REMI build / encode / decode / merge
+│   │   ├── augment.py    # transposition, train split only
+│   │   ├── prepare.py    # entry point: download -> BPE -> shards -> report
+│   │   └── dataset.py    # windows + deterministic batching
+│   ├── models/
+│   │   └── lstm.py       # the baseline, ~8.4M params with tied weights
+│   ├── train.py          # one loop, shared by every model
+│   └── sample.py         # generation + degenerate-output diagnostics
 └── tests/
 ```
 
@@ -82,7 +90,8 @@ piano-music-transformer/
 - [x] **Phase 0 — Skeleton and data pipeline.** Packaging, MAESTRO download, REMI+BPE
       tokenization, `.npy` shards per split, **round-trip test**. *Done when
       `python -m pmt.data.prepare` runs and the suite is green.*
-- [ ] **Phase 1 — LSTM baseline.** Training loop, checkpoint/resume, generation.
+- [~] **Phase 1 — LSTM baseline.** Augmentation, model, training loop with exact
+      resume, sampling. Code complete and tested; the 12,000-step run is in flight.
       *Done when it produces a MIDI file worth listening to.*
 - [ ] **Phase 2 — Transformer.** Decoder-only, RoPE, pre-norm, SDPA, cosine LR,
       gradient accumulation. Same pipeline, same CLI. *Done when it beats the
@@ -161,3 +170,27 @@ stale rather than archiving it.
   - A 1024-token context covers **~18 bars** (~58 tokens/bar after BPE), so the context
     length is musically meaningful rather than a fragment.
   - Next: Phase 1, LSTM baseline.
+
+- **2026-09-06 — Phase 1 code complete, training in flight.**
+  - **MPS is worth it for the LSTM:** 0.37 s/step vs 2.13 s on CPU at 8x1024 — 5.7x.
+    Real end-to-end throughput with `grad_accum=4` is ~20k tokens/s (1.64 s/step).
+  - **bf16 buys only ~7% for the LSTM** (0.350 vs 0.374 s/step); the recurrent path is
+    not matmul-bound. Baseline stays fp32. Re-measure for the Transformer, where the
+    gain should be much larger — that is the one place this decision may flip.
+  - **Augmentation is 11.1x, not 13x.** 1,869 of 12,506 transposed variants push notes
+    off the 88-key range and are dropped whole rather than clipped (clipping would
+    silently rewrite the music). Corpus: 12.6M -> **131.6M training tokens**, which
+    turns the data-bound problem from Phase 0 into a healthy ~15 tokens/parameter.
+  - **`DataLoader` dropped for step-indexed sampling.** Each batch is a pure function of
+    `(seed, step)`, so a run stopped and resumed lands bit-for-bit where an
+    uninterrupted run would. There is a test for exactly this.
+  - **Trap:** `bpe_vocab_size` below the REMI base vocabulary makes MidiTok skip BPE
+    with only a warning. Raising the time resolution in Phase 0 grew the base vocab
+    519 and silently broke smoke runs. Now it raises.
+  - **Trap:** `tokenizer[id]` raises `KeyError` for BPE-merged ids — a merge covers
+    several events and has no single event name.
+  - **An undertrained model emits almost only `Pitch` tokens** and never completes a
+    Pitch/Velocity/Duration triplet, so nothing decodes to a note. The sampler now
+    prints the event mix when a sample yields zero notes, which separates
+    "undertrained" from "broken pipeline" at a glance.
+  - Next: results from the 12,000-step run, then Phase 2.
