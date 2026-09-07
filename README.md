@@ -99,10 +99,11 @@ judging the unprompted samples.
 
 Not cherry-picked: they are the first sample of each batch.
 
-## What is verified so far
+## Why the tokenizer comes first
 
-The tokenizer is the foundation, so it is measured rather than assumed. Every
-number below comes from `python -m pmt.data.prepare` on MAESTRO v3:
+Whatever the tokenizer loses, no model can recover. It is therefore measured rather
+than assumed — every number below comes from `python -m pmt.data.prepare` on
+MAESTRO v3:
 
 | Property | Result |
 |---|---|
@@ -222,12 +223,20 @@ uv run pytest
 ## Layout
 
 ```
+app.py                 # Space entry point; the interface lives in pmt.demo
 src/pmt/
 ├── config.py          # dataclass configs; the defaults here are the source of truth
-├── train.py           # one training loop, shared by every model
-├── sample.py          # generation, with diagnostics for degenerate output
+├── train.py           # one training loop, shared by both models
+├── sample.py          # generation: top-k/p, repetition penalty, sliding context
+├── evaluate.py        # the head-to-head table, with its reference column
+├── metrics.py         # pitch-class entropy, scale/groove consistency, density
+├── render.py          # MIDI → audio via FluidSynth, dynamics preserved
+├── export.py          # package checkpoints for publication (safetensors)
+├── demo.py            # the Gradio interface, both models side by side
 ├── models/
-│   └── lstm.py        # the baseline: ~8.4M parameters with tied weights
+│   ├── base.py        # the contract: forward returns (logits, state)
+│   ├── lstm.py        # the baseline: 8.40M parameters, tied weights
+│   └── transformer.py # 8.65M: RoPE, SwiGLU, pre-norm RMSNorm, KV cache
 └── data/
     ├── download.py    # MAESTRO, MIDI only
     ├── tokenizer.py   # REMI build / encode / decode / track merge
@@ -246,7 +255,7 @@ safe if interruption is free.
 ## Roadmap
 
 - [x] **Phase 0** — Data pipeline: download, REMI+BPE tokenization, token shards, round-trip verification
-- [x] **Phase 1** — LSTM baseline, rewritten in PyTorch *(training underway)*
+- [x] **Phase 1** — LSTM baseline, rewritten in PyTorch
 - [x] **Phase 2** — Decoder-only Transformer (RoPE, pre-norm RMSNorm, SwiGLU, SDPA)
 - [x] **Phase 3** — Sampling: top-k / top-p / repetition penalty, KV cache, prompt continuation, sliding context
 - [x] **Phase 4** — Evaluation: perplexity plus musical metrics, head-to-head table, rendered audio
@@ -265,17 +274,18 @@ a real constraint and it shapes the results:
   conventional default — 1e-3 for the LSTM, 6e-4 for the Transformer. Forcing a shared
   value would suit one of them; tuning one and not the other would be worse. Tuning both
   properly is a larger project than this.
-- **The Transformer trains in bf16, the LSTM in fp32.** Measured at +22% for the
-  Transformer against +7% for the LSTM, with loss agreeing to 0.0002 over the same
-  steps. Autocast keeps parameters in fp32 and reduces only the matmuls, so if anything
-  this costs the Transformer a little precision rather than flattering it.
+- **The Transformer trains in bf16, the LSTM in fp32.** A 12-step benchmark showed
+  +22% for the Transformer against +7% for the LSTM, with loss agreeing to 0.0002.
+  Sustained over the full run the advantage was closer to **12%** (12,877 against
+  11,470 tokens/s) and the two runs took roughly the same wall clock — a short
+  benchmark over-promised, as it did twice more in this project. Autocast keeps
+  parameters in fp32 and reduces only the matmuls, so if anything this costs the
+  Transformer a little precision rather than flattering it.
 - Both models are **locally coherent and structurally weak** — convincing phrases, no
   long-range musical form. 8.65M parameters on a laptop is the reason.
 - Solo piano only, no stylistic range.
 - Augmentation is transposition alone. It multiplies the data without adding a single
   new musical idea, which is a real ceiling on what any of this can learn.
-
-These limits will be reported with numbers, not hidden, once models exist.
 
 ## Licence
 
