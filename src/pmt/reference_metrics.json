@@ -1,0 +1,13 @@
+{
+  "source": "MAESTRO v3.0.0 validation split",
+  "samples": 20,
+  "tokens_per_sample": 1024,
+  "note": "Aggregate statistics measured locally with `python -m pmt.evaluate`. Shipped as numbers rather than as tokenised MAESTRO, which would be a redistribution of a CC BY-NC-SA dataset.",
+  "metrics": {
+    "pitch_class_entropy": 3.2442159729776634,
+    "scale_consistency": 0.8099697388384769,
+    "groove_consistency": 0.6287667144342944,
+    "note_density": 5.078430158562667,
+    "pitch_range": 63.1
+  }
+}

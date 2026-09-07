@@ -53,6 +53,24 @@ def export_model(checkpoint_path: Path, destination: Path) -> dict:
     return summary
 
 
+def load_published(directory: Path, device: torch.device | None = None):
+    """Rebuild a model from an exported directory - the inverse of ``export_model``.
+
+    Published weights carry no optimizer state and no pickled objects, so this is
+    the loading path a downloader uses, and the one the hosted demo uses too.
+    """
+    from safetensors.torch import load_model  # imported here: the hub extra is optional
+
+    config = json.loads((directory / "config.json").read_text())
+    config_cls, builder = MODELS[config["model"]]
+    model = builder(config_cls(**config["model_config"]))
+    load_model(model, str(directory / "model.safetensors"))
+    if device is not None:
+        model.to(device)
+    model.eval()
+    return model, config
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description="Package checkpoints for the Hub")
     parser.add_argument("--runs", type=Path, default=OUTPUTS_DIR)
