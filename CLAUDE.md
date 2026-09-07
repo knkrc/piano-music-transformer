@@ -37,7 +37,16 @@ important phase even though it looks like the most boring one.
 | Language | English everywhere | Public portfolio repo — code, comments, docs, commits |
 | Augmentation | Offline, transposition, train split only | BPE merges several events into one token, so pitch cannot be shifted on ids after the fact |
 | Batching | Step-indexed deterministic sampling, no `DataLoader` | Makes resume *exact* rather than approximate; memmap reads are microseconds, so there is nothing to prefetch |
-| Training budget | 12,000 steps (~3 epochs, ~5.5 h) | Phase 2 gets the identical budget — an under-trained baseline would flatter the Transformer |
+| Training budget | 12,000 steps (~3 epochs, ~10 h each) | Phase 2 gets the identical budget — an under-trained baseline would flatter the Transformer |
+| Model comparison | Matched on **parameters** (8.65M vs 8.40M), not width or depth | The question is which architecture spends the same budget better; different sizes cannot answer it. There is a test enforcing this |
+| Learning rate | Each architecture's conventional default (LSTM 1e-3, Transformer 6e-4) | Forcing a shared value would suit one of them; tuning one and not the other is worse. Neither got a sweep, and the README says so |
+| `vocab_size` | Derived from the data's `meta.json`, never configured | A model and tokenizer that disagree produce ids that cannot be decoded, and it only surfaces at generation time |
+| Repetition penalty | Defaults to **off** (1.0) | Music *is* repetition — motifs, sequences, ostinati. The penalty that stops a language model looping suppresses the structure this model exists to learn |
+| MIDI prompts | Cut at a downbeat, not after N tokens | Hand the model whole bars and it picks up on a barline, the way a player would |
+| Metric reporting | Always beside a **reference column** measured on real MAESTRO | "Scale consistency 0.86" means nothing until you know the corpus scores 0.87 |
+| Undefined metrics | Aggregated as absent, never as zero | Averaging a silent sample in as a zero would flatter a model that produced nothing |
+| Demo layout | Both models side by side, one prompt, one seed | A single-model generator is a toy; the comparison *is* the project, and it should be heard rather than read |
+| `gradio` | An optional extra, not a dependency | Nothing in the training or evaluation path needs it, and it is a large tree |
 
 **The audio release is never downloaded.** MAESTRO with audio is ~120 GB; only the
 58 MB MIDI archive is fetched.
@@ -51,7 +60,8 @@ Apple M5, 16 GB unified memory, MPS backend.
 - Try `torch.autocast("mps", bfloat16)`; **fall back to fp32** on NaN or kernel errors, and record it here
 - `torch.compile` stays **off** by default (flaky on MPS); enabling it is opt-in
 - Every training run must be **resumable** (optimizer, scheduler and RNG state included) — overnight training is the working model
-- Expect training time in hours, not minutes. Every entry point keeps a `--smoke` mode for fast iteration
+- Expect training time in hours, not minutes, and **measure it over hours, not minutes**.
+  Every entry point keeps a `--smoke` mode for fast iteration
 
 ## 4. Deliberately out of scope
 
@@ -90,19 +100,22 @@ piano-music-transformer/
 - [x] **Phase 0 — Skeleton and data pipeline.** Packaging, MAESTRO download, REMI+BPE
       tokenization, `.npy` shards per split, **round-trip test**. *Done when
       `python -m pmt.data.prepare` runs and the suite is green.*
-- [~] **Phase 1 — LSTM baseline.** Augmentation, model, training loop with exact
+- [x] **Phase 1 — LSTM baseline.** Augmentation, model, training loop with exact
       resume, sampling. Code complete and tested; the 12,000-step run is in flight.
       *Done when it produces a MIDI file worth listening to.*
-- [ ] **Phase 2 — Transformer.** Decoder-only, RoPE, pre-norm, SDPA, cosine LR,
-      gradient accumulation. Same pipeline, same CLI. *Done when it beats the
-      baseline on validation NLL.*
-- [ ] **Phase 3 — Sampling.** temperature / top-k / top-p / repetition penalty,
-      KV cache, **prompt continuation** (give it 4 bars, it continues). The demo
-      lives or dies here.
-- [ ] **Phase 4 — Evaluation.** Perplexity plus musical metrics, LSTM vs
-      Transformer table, rendered audio. *Done when the README has numbers and sound.*
-- [ ] **Phase 5 — Shop window.** Gradio demo, weights on the HF Hub, README with a
-      Limitations section.
+- [x] **Phase 2 — Transformer.** Decoder-only, RoPE, pre-norm RMSNorm, SwiGLU, SDPA,
+      KV cache. Code complete and tested; waiting for the GPU. *Done when it beats
+      the baseline on validation NLL.*
+- [x] **Phase 3 — Sampling.** top-p, repetition penalty, **prompt continuation** from
+      a MIDI file cut at a barline, and context sliding past `max_seq_len`. Code
+      complete and tested; needs a trained model to judge. The KV cache moved to
+      Phase 2 - see the log.
+- [x] **Phase 4 — Evaluation.** Perplexity plus musical metrics, side-by-side table,
+      audio rendering. Code complete and tested; needs trained models to fill in.
+      *Done when the README has numbers and sound.*
+- [x] **Phase 5 — Shop window.** Gradio demo comparing both models side by side under
+      identical conditions; README with a Limitations section. Weights on the HF Hub
+      still to do. *Code complete; needs trained models.*
 - [ ] **Phase 6 (optional) — Control.** Chord conditioning or infilling.
 
 Phases 0-4 make a finished project. Phase 5 makes it a visible one.
@@ -173,7 +186,7 @@ stale rather than archiving it.
 
 - **2026-09-06 — Phase 1 code complete, training in flight.**
   - **MPS is worth it for the LSTM:** 0.37 s/step vs 2.13 s on CPU at 8x1024 — 5.7x.
-    Real end-to-end throughput with `grad_accum=4` is ~20k tokens/s (1.64 s/step).
+    A 50-step burst measured 1.64 s/step — see the correction in the Phase 2 entry.
   - **bf16 buys only ~7% for the LSTM** (0.350 vs 0.374 s/step); the recurrent path is
     not matmul-bound. Baseline stays fp32. Re-measure for the Transformer, where the
     gain should be much larger — that is the one place this decision may flip.
@@ -194,3 +207,125 @@ stale rather than archiving it.
     prints the event mix when a sample yields zero notes, which separates
     "undertrained" from "broken pipeline" at a glance.
   - Next: results from the 12,000-step run, then Phase 2.
+
+- **2026-09-06 — Phase 2 code complete, written while the baseline trains.**
+  - **The KV cache moved up from Phase 3, by force.** Both models share one
+    `generate()`, which advances one token at a time carrying a `state`. For an RNN
+    that state is free; for a Transformer it is the KV cache. Without it the
+    Transformer simply cannot sample, so it is not optional and not Phase 3 work.
+    A test asserts cached decoding matches a full forward pass to 1e-4.
+  - **`is_causal` is wrong once a cache exists.** It aligns the mask top-left, but a
+    cached query block sits at the *end* of the context. The attention shifts the
+    triangle by the cached length instead when the two lengths differ.
+  - **Bug with real reach: `vocab_size` was never tied to the data.** Model configs
+    defaulted to 4096 while the smoke dataset's tokenizer had 1024, so the model
+    emitted ids that did not exist and MidiTok died with `KeyError: None` deep in
+    BPE decoding. The LSTM had the same defect and hid it by collapsing onto frequent
+    tokens. `vocab_size` is now read from `meta.json` at training time and validated
+    at sampling time.
+  - **A test that measured nothing.** "Position changes the prediction", fed a
+    sequence of identical tokens, could never fail: identical tokens give identical
+    value vectors, and any weighted average of identical vectors is that vector -
+    with or without RoPE. Replaced with RoPE's actual defining property, that the
+    query-key score depends only on the distance between positions.
+  - **Do not run anything on the GPU during a long training run.** A CPU smoke test
+    plus one sampling call visibly dented throughput.
+  - **A short benchmark does not predict a long run.** 50 steps measured 1.64 s/step;
+    sustained over 2h45m the real rate is **2.92 s/step (~11k tokens/s)** — the burst
+    was optimistic by 1.8x, and the 12,000-step budget is ~10 hours per model, not
+    ~5.5. CPU sits at 2% throughout, so the run is GPU-bound and a laptop-class M5
+    does not hold its opening throughput under sustained load. Any future timing
+    claim in this project gets measured over at least an hour before it is written
+    down. The budget was kept at 12,000 anyway: the decision was made on its merits,
+    and shrinking it because the clock moved would weaken both models equally for
+    no gain in fairness.
+  - Next: train the Transformer on the same 12,000-step budget once the GPU frees up,
+    and measure bf16 for it - the one decision from Phase 1 likely to flip.
+
+- **2026-09-06 — Phase 3 code complete, also written while the baseline trains.**
+  - **RoPE paid for itself.** Generation can now run past the 1024-token window by
+    dropping the oldest cache entries. That is safe *because* RoPE scores depend on
+    the distance between positions: a sliding window keeps every distance inside the
+    trained range while absolute positions climb without limit. Learned positional
+    embeddings would have hard-stopped at 1024. A test generates 40 tokens through a
+    16-token window.
+  - **Position had to move into the state.** It was inferred from the cache length,
+    which a sliding window shortens - positions would have run backwards. The
+    Transformer's state is now `(next_position, layer_caches)`, and RoPE tables are
+    computed per call instead of read from a table capped at `max_seq_len`.
+  - **Repetition penalty ships off by default**, and that is a judgement about music
+    rather than an oversight. Motifs, sequences and a held accompaniment figure are
+    the structure worth learning; the penalty that rescues a looping language model
+    would erase it. It stays available for a model that has collapsed onto one note.
+  - **MIDI prompts are cut at a downbeat**, using `Score.get_downbeats()`, rather
+    than after a token count. With BPE a bar boundary can sit inside a merged token,
+    so cutting the score before tokenizing is the only clean way to hand the model
+    whole bars.
+  - Trap, twice now: a `ruff format` pass between writing and patching a block makes
+    text-matching edits miss silently. Verify by grepping for the old symbol, not by
+    trusting the patch reported success.
+
+- **2026-09-06 — Phase 4 code complete.**
+  - Four musical metrics implemented in-repo (~120 lines) rather than pulling in
+    `muspy`: pitch-class entropy, scale consistency, groove consistency, note density.
+  - **Measured the reference values first**, on real MAESTRO performances: entropy
+    ~3.1-3.2 of a possible 3.58, scale consistency 0.82-0.93, groove 0.61-0.66, note
+    density 2.2-7.3 per beat. Every table this project prints carries that reference
+    column, because a generated "scale consistency 0.86" is unreadable without it.
+  - Useful floor to remember: a purely chromatic run already scores **7/12 = 0.583**
+    on scale consistency, since seven of twelve pitch classes fit any major scale.
+    Zero is not the baseline, 0.583 is. There is a test pinning this.
+  - Undefined metrics aggregate as absent rather than zero. A sample too short or too
+    empty to measure would otherwise average in as a good result.
+  - `evaluate.py` regenerates from every model with the same seed and the same
+    sampling settings. Varying either between models would make the table a
+    comparison of sampling choices rather than of models.
+
+- **2026-09-06 — Phase 5 demo complete.**
+  - The demo generates from **both models at once**, same prompt, same seed, same
+    settings, rendered to audio side by side. A single-model generator would be a
+    toy; this lets someone hear the comparison instead of reading a table of it.
+  - The interface lives in `pmt.demo`; `app.py` at the root is the three-line entry
+    point Spaces expects. Putting it only at the root made it unimportable under the
+    `src/` layout, so the tests could not reach it.
+  - Checked against the partially-trained baseline (step ~4,000, val 4.35) and the
+    whole chain runs: generate -> MIDI -> MP3 -> metrics beside the corpus. The
+    numbers already read sensibly - the model is **sparser** (1.33 vs 5.26 notes per
+    beat), **less tonal** (0.78 vs 0.84) and **more mechanical** (groove 0.79 vs
+    0.66) than real playing. Exactly the profile a third-trained model should have,
+    which is some evidence the metrics measure what they claim.
+  - `gradio` is an optional extra. Installing it touched no package the running
+    training depended on, which was checked with `uv sync --dry-run` first.
+
+- **2026-09-07 — Both models trained. Phases 0-5 done.**
+  - **Transformer 31.9 test perplexity against the LSTM's 58.2** — 45% lower on an
+    identical budget. It passed the baseline's *final* score around step 2,000, one
+    sixth of the way through its own run. Neither model overfitted; both were still
+    improving when the budget ran out.
+  - **The musical metrics did not follow.** A 45% cut in perplexity bought a split
+    decision: the Transformer sits closer to the corpus on scale consistency (0.85 vs
+    0.91, corpus 0.81) and groove (0.71 vs 0.75, corpus 0.63), the LSTM on note density
+    (2.30 vs 1.69, corpus 5.08) and pitch range, and they are identical on pitch-class
+    entropy. **Better next-token prediction is not the same thing as better music**, and
+    this is the most interesting result the project produced. Both models drift the same
+    way: more diatonic, more regular, a third of the note density, a narrower keyboard —
+    the safe middle of the distribution.
+  - **bf16's benchmark advantage did not survive the run.** It measured +22% over fp32
+    in a 12-step burst; sustained, the Transformer averaged 12,877 tok/s against the
+    LSTM's 11,470 - about 12%, and the two runs took roughly the same wall clock. Third
+    time a short measurement over-promised. The decision still stands (loss identical,
+    never slower), but the *reason* given for it was overstated.
+  - **Bug: `evaluate()` forced the model back into train mode.** Correct inside the
+    training loop, corrupting anywhere else - a caller that evaluated and then sampled
+    generated with dropout live. It surfaced only because MPS refuses dropout in
+    `scaled_dot_product_attention`; on CPU it would have quietly produced worse samples
+    for the rest of the project. `evaluate()` now restores the mode it found, and
+    `generate()` forces eval regardless of what the caller left on. Both have tests.
+  - **Bug: `getattr(torch, "bf16")`.** Torch spells it `bfloat16`. Every run until the
+    Transformer had been fp32, so nothing exercised it and the first bf16 launch died at
+    startup. Precision names live in a table now.
+  - **Cold machines are faster.** The same run measured 2.81 s/step warm, 2.46 s/step
+    after an overnight sleep, and 2.99 s/step again once hot. Any timing claim in this
+    project needs to say what thermal state it was measured in.
+  - Remaining, if it is ever picked up again: weights on the HF Hub, a hosted Space,
+    multiple seeds for error bars, and a learning-rate sweep for both models.

@@ -8,9 +8,7 @@ course. The interesting question was not "can a Transformer do it better", but
 **where the original approach actually loses information** — and the answer turned
 out to be the representation, not the architecture.
 
-> **Status: Phase 1 of 5 in progress.** The data pipeline is built and verified and
-> the LSTM baseline trains end to end; its full run is underway. No results are
-> claimed here until they exist. Roadmap below.
+> **Status: complete.** Both models trained, compared and rendered. Results below.
 
 ---
 
@@ -29,6 +27,75 @@ MIDI ──► REMI tokens ──► decoder-only Transformer ──► sampling
 
 Both models share one pipeline, one tokenizer and one evaluation protocol, so the
 comparison between them means something.
+
+## Results
+
+Both models trained on the same MAESTRO data, the same tokenizer, the same 12,000-step
+budget, the same data order and the same evaluation. Three things are deliberately not
+tied: the architecture, the learning rate (each architecture's conventional default) and
+the numerical precision. All three are spelled out under [Limitations](#constraints-and-limitations).
+
+### Prediction
+
+| | LSTM | Transformer |
+|---|---|---|
+| Parameters | 8.40M | 8.65M |
+| Validation loss | 4.085 | **3.550** |
+| Test perplexity | 58.2 | **31.9** |
+
+**45% lower perplexity on the same budget.** The Transformer passed the LSTM's *final*
+score at around step 2,000 — one sixth of the way through its own training.
+
+Both models were still improving when the budget ran out, and neither overfitted: the
+train/validation gap stayed at 0.14 (LSTM) and 0.06 (Transformer). These are numbers
+about a 10-hour laptop run, not about the architectures at scale.
+
+### What the notes look like
+
+| Metric | LSTM | Transformer | Real MAESTRO |
+|---|---|---|---|
+| Pitch-class entropy | 2.86 | 2.86 | 3.24 |
+| Scale consistency | 0.91 | **0.85** | 0.81 |
+| Groove consistency | 0.75 | **0.71** | 0.63 |
+| Note density | **2.30** | 1.69 | 5.08 |
+| Pitch range | **47.4** | 46.0 | 63.1 |
+
+Bold marks whichever model sits closer to the corpus. It is a split decision: the
+Transformer is closer on tonality and rhythmic regularity, the LSTM on density and
+range, and they are indistinguishable on pitch-class entropy.
+
+**This is the finding worth sitting with.** A 45% cut in perplexity did not buy a
+matching improvement in what the output looks like. Both models drift the same way from
+the corpus — more diatonic, more rhythmically regular, roughly a third of the note
+density, a narrower keyboard. Both have found the safe middle of the distribution: a
+plausible, well-behaved average of a MAESTRO performance, with the chromaticism, rubato
+and density that make a real one interesting sanded off. Better prediction of the next
+token is not the same thing as better music, and at this scale the gap between them is
+wide.
+
+### Starting from nothing is hard for both
+
+| | Reached the full 1024 tokens |
+|---|---|
+| LSTM | 11 / 20 |
+| Transformer | 14 / 20 |
+
+Trained on a stream where pieces are separated by begin- and end-of-sequence tokens,
+both models learned that pieces end and reach for it too eagerly from a cold start — the
+LSTM produced four samples under 90 tokens. Given four bars to continue, neither model
+did this: prompted generation ran the full budget every time. Worth knowing before
+judging the unprompted samples.
+
+### Listen
+
+[`samples/`](samples/) holds matched pairs — the same seed, the same prompt, both models:
+
+| | Unprompted | Continuing four real bars |
+|---|---|---|
+| LSTM | `lstm_unprompted.mp3` | `lstm_continuation.mp3` |
+| Transformer | `transformer_unprompted.mp3` | `transformer_continuation.mp3` |
+
+Not cherry-picked: they are the first sample of each batch.
 
 ## What is verified so far
 
@@ -108,6 +175,24 @@ Generate from a checkpoint:
 uv run python -m pmt.sample --checkpoint outputs/lstm/best.pt --num 5
 ```
 
+Compare the trained models on held-out data and on what they generate:
+
+```bash
+uv run python -m pmt.evaluate --checkpoint outputs/lstm/best.pt --checkpoint outputs/transformer/best.pt
+```
+
+Hear them side by side in the browser:
+
+```bash
+uv run --extra demo python app.py
+```
+
+Audio needs FluidSynth and a soundfont. Install them once:
+
+```bash
+brew install fluid-synth && uv run python -m pmt.render --install-soundfont
+```
+
 Run the tests — they build their MIDI in memory and need no dataset:
 
 ```bash
@@ -141,24 +226,34 @@ safe if interruption is free.
 ## Roadmap
 
 - [x] **Phase 0** — Data pipeline: download, REMI+BPE tokenization, token shards, round-trip verification
-- [ ] **Phase 1** — LSTM baseline, rewritten in PyTorch *(code complete, training underway)*
-- [ ] **Phase 2** — Decoder-only Transformer (RoPE, pre-norm, SDPA)
-- [ ] **Phase 3** — Sampling: top-k / top-p / repetition penalty, KV cache, prompt continuation
-- [ ] **Phase 4** — Evaluation: perplexity plus musical metrics, head-to-head table, rendered audio
-- [ ] **Phase 5** — Gradio demo and published weights
+- [x] **Phase 1** — LSTM baseline, rewritten in PyTorch *(training underway)*
+- [x] **Phase 2** — Decoder-only Transformer (RoPE, pre-norm RMSNorm, SwiGLU, SDPA)
+- [x] **Phase 3** — Sampling: top-k / top-p / repetition penalty, KV cache, prompt continuation, sliding context
+- [x] **Phase 4** — Evaluation: perplexity plus musical metrics, head-to-head table, rendered audio
+- [x] **Phase 5** — Gradio demo, side by side under identical conditions
 
 ## Constraints and limitations
 
 This is trained entirely on a single Apple M5 with 16 GB of unified memory. That is
 a real constraint and it shapes the results:
 
-- The baseline is ~8.4M parameters at a 1024-token context; the Transformer will be
-  sized to match, and both get an identical 12,000-step budget
-- Even at 131.6M augmented tokens, expect a model that is **locally coherent but
-  structurally weak** — convincing phrases, no long-range musical form
-- Solo piano only, no stylistic range
+- **One run per model, no error bars.** Every number here comes from a single training
+  run at a single seed. The perplexity gap is far too large to be seed noise; the
+  musical-metric differences (0.91 vs 0.85) may well not be. Read them as suggestive,
+  not settled.
+- **Neither model got a hyperparameter sweep.** Learning rate is each architecture's
+  conventional default — 1e-3 for the LSTM, 6e-4 for the Transformer. Forcing a shared
+  value would suit one of them; tuning one and not the other would be worse. Tuning both
+  properly is a larger project than this.
+- **The Transformer trains in bf16, the LSTM in fp32.** Measured at +22% for the
+  Transformer against +7% for the LSTM, with loss agreeing to 0.0002 over the same
+  steps. Autocast keeps parameters in fp32 and reduces only the matmuls, so if anything
+  this costs the Transformer a little precision rather than flattering it.
+- Both models are **locally coherent and structurally weak** — convincing phrases, no
+  long-range musical form. 8.65M parameters on a laptop is the reason.
+- Solo piano only, no stylistic range.
 - Augmentation is transposition alone. It multiplies the data without adding a single
-  new musical idea, which is a real ceiling on what any of this can learn
+  new musical idea, which is a real ceiling on what any of this can learn.
 
 These limits will be reported with numbers, not hidden, once models exist.
 

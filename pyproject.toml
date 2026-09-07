@@ -16,6 +16,11 @@ dependencies = [
     "tqdm>=4.66",
 ]
 
+# The demo is an extra so a plain `uv sync` stays lean: gradio is a large tree
+# and nothing in the training or evaluation path needs it.
+[project.optional-dependencies]
+demo = ["gradio>=5.0"]
+
 [dependency-groups]
 dev = ["pytest>=8.0", "ruff>=0.9"]
 

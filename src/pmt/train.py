@@ -17,7 +17,7 @@ import json
 import math
 import random
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 
 import numpy as np
@@ -28,8 +28,17 @@ from torch import nn
 from pmt.config import OUTPUTS_DIR, PROCESSED_DIR, load_config
 from pmt.data.dataset import TokenWindowDataset, deterministic_batch, evaluation_batches
 from pmt.models.lstm import LSTMConfig, build_lstm
+from pmt.models.transformer import TransformerConfig, build_transformer
 
-MODELS = {"lstm": (LSTMConfig, build_lstm)}
+MODELS = {
+    "lstm": (LSTMConfig, build_lstm),
+    "transformer": (TransformerConfig, build_transformer),
+}
+
+# Config names mapped to dtypes explicitly. Deriving them with getattr(torch, name)
+# looks tidy and silently accepts "bf16", which torch spells "bfloat16" - a crash
+# that only appears the first time a run is not fp32.
+PRECISIONS = {"fp32": None, "bf16": torch.bfloat16, "fp16": torch.float16}
 
 
 @dataclass(slots=True)
@@ -87,9 +96,12 @@ def learning_rate_at(step: int, cfg: TrainConfig) -> float:
 
 
 def autocast_for(device: torch.device, precision: str):
-    if precision == "fp32":
+    if precision not in PRECISIONS:
+        raise ValueError(f"unknown precision {precision!r}; expected one of {sorted(PRECISIONS)}")
+    dtype = PRECISIONS[precision]
+    if dtype is None:
         return contextlib.nullcontext()
-    return torch.autocast(device.type, dtype=getattr(torch, precision))
+    return torch.autocast(device.type, dtype=dtype)
 
 
 def cross_entropy(logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
@@ -100,7 +112,14 @@ def cross_entropy(logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
 
 @torch.no_grad()
 def evaluate(model: nn.Module, batches, device: torch.device, precision: str) -> float:
-    """Mean loss per token over a fixed set of windows, in nats."""
+    """Mean loss per token over a fixed set of windows, in nats.
+
+    The model is restored to the mode it arrived in rather than forced back to
+    training. Forcing it works inside the training loop and quietly corrupts any
+    caller that evaluates a model it then samples from - dropout would still be
+    live during generation.
+    """
+    was_training = model.training
     model.eval()
     total_loss = 0.0
     total_tokens = 0
@@ -110,7 +129,7 @@ def evaluate(model: nn.Module, batches, device: torch.device, precision: str) ->
             logits, _ = model(inputs)
         total_loss += cross_entropy(logits, targets).item() * targets.numel()
         total_tokens += targets.numel()
-    model.train()
+    model.train(was_training)
     return total_loss / max(1, total_tokens)
 
 
@@ -148,6 +167,17 @@ def train(
     seed_everything(cfg.seed)
     device = resolve_device(cfg.device)
     out_dir.mkdir(parents=True, exist_ok=True)
+
+    # Vocabulary size is a property of the prepared data, never a free parameter.
+    # Leaving the two to drift apart lets a model emit ids the tokenizer cannot
+    # decode, which surfaces only at generation time as a decoding crash.
+    meta = json.loads((data_dir / "meta.json").read_text())
+    if model_cfg.vocab_size != meta["vocab_size"]:
+        print(
+            f"vocab_size {model_cfg.vocab_size} -> {meta['vocab_size']} "
+            f"(taken from {data_dir.name}/meta.json)"
+        )
+        model_cfg = replace(model_cfg, vocab_size=meta["vocab_size"])
 
     train_data = TokenWindowDataset(data_dir / "train.npy", cfg.block_size)
     val_data = TokenWindowDataset(data_dir / "validation.npy", cfg.block_size)

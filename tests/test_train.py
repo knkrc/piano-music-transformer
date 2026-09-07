@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import replace
 
 import numpy as np
@@ -9,8 +10,8 @@ import pytest
 import torch
 
 from pmt.data.dataset import TokenWindowDataset, deterministic_batch, evaluation_batches
-from pmt.models.lstm import LSTMConfig
-from pmt.train import TrainConfig, learning_rate_at, train
+from pmt.models.lstm import LSTMConfig, build_lstm
+from pmt.train import TrainConfig, autocast_for, evaluate, learning_rate_at, train
 
 TINY_TRAIN = TrainConfig(
     batch_size=2,
@@ -33,6 +34,7 @@ def token_data(tmp_path):
     rng = np.random.default_rng(0)
     for split in ("train", "validation"):
         np.save(tmp_path / f"{split}.npy", rng.integers(4, 64, 4000).astype(np.uint16))
+    (tmp_path / "meta.json").write_text(json.dumps({"vocab_size": TINY_MODEL.vocab_size}))
     return tmp_path
 
 
@@ -93,3 +95,50 @@ def test_schedule_warms_up_then_decays_to_the_floor():
     assert learning_rate_at(9, cfg) == pytest.approx(1e-3)
     assert learning_rate_at(99, cfg) == pytest.approx(1e-4, rel=0.02)
     assert learning_rate_at(50, cfg) < learning_rate_at(10, cfg)
+
+
+def test_vocabulary_size_is_taken_from_the_data(token_data, tmp_path):
+    """A model whose vocabulary disagrees with the data emits undecodable ids.
+
+    The failure surfaces only at generation time as a tokenizer crash, so the two
+    are tied together here instead of being left to agree by convention.
+    """
+    out = tmp_path / "run"
+
+    train(TINY_TRAIN, replace(TINY_MODEL, vocab_size=4096), token_data, out)
+
+    saved = json.loads((out / "config.json").read_text())
+    assert saved["model"]["vocab_size"] == TINY_MODEL.vocab_size
+
+
+@pytest.mark.parametrize("precision", ["fp32", "bf16", "fp16"])
+def test_every_configured_precision_resolves(precision):
+    """A wrong precision name used to surface only on the first non-fp32 run.
+
+    `getattr(torch, "bf16")` reads as if it works and does not: torch spells it
+    `bfloat16`. The names live in a table now, and this walks all of them.
+    """
+    with autocast_for(torch.device("cpu"), precision):
+        pass
+
+
+def test_an_unknown_precision_is_rejected_immediately():
+    with pytest.raises(ValueError, match="unknown precision"):
+        autocast_for(torch.device("cpu"), "float8")
+
+
+@pytest.mark.parametrize("started_training", [True, False])
+def test_evaluation_restores_the_mode_it_found(token_data, started_training):
+    """Forcing train mode back on works inside the loop and corrupts everyone else.
+
+    A caller that evaluates a model and then samples from it would generate with
+    dropout still live - silently wrong on CPU, and a hard crash on MPS, where
+    scaled_dot_product_attention refuses dropout.
+    """
+    model = build_lstm(TINY_MODEL)
+    model.train(started_training)
+    dataset = TokenWindowDataset(token_data / "validation.npy", 32)
+
+    evaluate(model, evaluation_batches(dataset, 2, 1), torch.device("cpu"), "fp32")
+
+    assert model.training is started_training

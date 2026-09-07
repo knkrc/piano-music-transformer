@@ -1,0 +1,51 @@
+# Decoder-only Transformer. Everything outside the `model` block is deliberately
+# identical to configs/lstm.yaml: same budget, same data order, same schedule
+# shape, same evaluation. The one exception is the learning rate, explained below.
+
+train:
+  model: transformer
+
+  batch_size: 8
+  grad_accum: 4
+  block_size: 1024
+  # The same 12,000 steps the baseline gets. An under-trained baseline would
+  # flatter this model, and a longer run for this model would flatter it too.
+  max_steps: 12000
+
+  # This is the one number that differs, and it is worth being explicit about.
+  # 1e-3 is the conventional default for an LSTM; ~6e-4 is the conventional
+  # default for a small decoder-only Transformer, which is more sensitive to a
+  # high rate. Using each architecture's own default is less biased than forcing
+  # a shared value that suits one of them, but it is still not a tuned comparison
+  # - neither model got a sweep. See the Limitations section of the README.
+  lr: 6.0e-4
+  min_lr_ratio: 0.1
+  warmup_steps: 200
+  weight_decay: 0.01
+  grad_clip: 1.0
+
+  log_every: 25
+  eval_every: 500
+  eval_batches: 40
+  save_every: 500
+
+  seed: 1337
+  device: auto
+  # Measured on an M5: +22.1% over fp32, against +7% for the LSTM - attention and
+  # the feed-forward are matmul-bound in a way the recurrent path is not. Loss
+  # agreed with fp32 to 0.0002 over the same 12 steps, so this buys time without
+  # changing what is learned. Autocast keeps parameters in fp32; only the matmuls
+  # are reduced, which cannot flatter this model against the fp32 baseline.
+  precision: bf16
+
+model:
+  # ~8.65M parameters against the baseline's 8.40M. Matched on parameters rather
+  # than on width or depth: the question is which architecture spends the same
+  # budget better, and models of different sizes cannot answer it.
+  d_model: 384
+  n_heads: 6
+  n_layers: 4
+  ffn_hidden: 1024
+  max_seq_len: 1024
+  dropout: 0.2
+  tie_weights: true

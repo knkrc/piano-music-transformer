@@ -14,14 +14,19 @@ import os
 import shutil
 import subprocess
 import tempfile
+import urllib.request
 from pathlib import Path
 
 from pmt.config import OUTPUTS_DIR
 
+# Where a downloaded soundfont goes. Platform-neutral, so the demo can install
+# one for itself on a fresh machine or a hosted Space.
+DOWNLOAD_DIR = Path.home() / ".local/share/soundfonts"
 SOUNDFONT_DIRS = (
     Path.home() / "Library/Audio/Sounds/Banks",  # macOS
     Path("/usr/share/sounds/sf2"),  # Debian / Ubuntu
     Path("/opt/homebrew/share/soundfonts"),
+    DOWNLOAD_DIR,
 )
 SOUNDFONT_URL = (
     "https://ftp.osuosl.org/pub/musescore/soundfont/MuseScore_General/MuseScore_General.sf3"
@@ -32,6 +37,23 @@ INSTALL_HINT = (
     f"~/Library/Audio/Sounds/Banks/MuseScore_General.sf3 {SOUNDFONT_URL}\n"
     "Or point PMT_SOUNDFONT at an existing .sf2/.sf3 file."
 )
+
+
+def download_soundfont(destination: Path | None = None) -> Path:
+    """Fetch the default soundfont (~38 MB) unless it is already there.
+
+    MuseScore_General is MIT-licensed, which matters for a repository that
+    anyone may clone and run.
+    """
+    target = destination or (DOWNLOAD_DIR / "MuseScore_General.sf3")
+    if target.exists():
+        return target
+    target.parent.mkdir(parents=True, exist_ok=True)
+    partial = target.with_suffix(target.suffix + ".part")
+    with urllib.request.urlopen(SOUNDFONT_URL) as response, partial.open("wb") as handle:
+        shutil.copyfileobj(response, handle)
+    partial.replace(target)
+    return target
 
 
 def find_soundfont(explicit: Path | None = None) -> Path:
@@ -144,7 +166,12 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--soundfont", type=Path, default=None)
     parser.add_argument("--format", choices=("mp3", "wav"), default="mp3")
     parser.add_argument("--gain", type=float, default=0.8)
+    parser.add_argument("--install-soundfont", action="store_true", help="download one and exit")
     args = parser.parse_args(argv)
+
+    if args.install_soundfont:
+        print(f"soundfont ready at {download_soundfont()}")
+        return
 
     soundfont = find_soundfont(args.soundfont)
     sources = sorted(args.input.glob("*.mid")) if args.input.is_dir() else [args.input]
