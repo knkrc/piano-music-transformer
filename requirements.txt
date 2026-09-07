@@ -1,0 +1,1 @@
+# Hugging Face Spaces installs this. The project is pulled from GitHub so the\n# Space and the repository cannot drift apart.\ngit+https://github.com/knkrc/piano-music-transformer@main\ngradio>=5.0\nsafetensors>=0.4\nhuggingface-hub>=0.26\n

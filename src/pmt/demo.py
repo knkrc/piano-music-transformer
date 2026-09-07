@@ -23,12 +23,16 @@ import torch
 from pmt.config import OUTPUTS_DIR, PROCESSED_DIR
 from pmt.data.dataset import TokenWindowDataset
 from pmt.data.tokenizer import TOKENIZER_FILENAME, decode_to_score, load_tokenizer
+from pmt.export import load_published
 from pmt.metrics import aggregate, summarise
 from pmt.render import find_soundfont, render_midi
 from pmt.sample import SamplingSettings, generate, load_model, prompt_from_midi
 from pmt.train import resolve_device, seed_everything
 
 MODEL_LABELS = {"lstm": "LSTM baseline", "transformer": "Transformer"}
+# Shipped inside the package so it survives a pip install, which is how the
+# hosted Space gets this code.
+REFERENCE_FILE = Path(__file__).parent / "reference_metrics.json"
 REFERENCE_SAMPLES = 20
 FROM_SCRATCH = "From scratch"
 FROM_UPLOAD = "Continue an uploaded MIDI"
@@ -36,12 +40,18 @@ FROM_CORPUS = "Continue a MAESTRO excerpt"
 
 
 def discover_checkpoints(root: Path = OUTPUTS_DIR) -> dict[str, Path]:
-    """Find the best checkpoint of each trained model, ordered oldest phase first."""
+    """Find each trained model, ordered oldest phase first.
+
+    Two layouts are accepted: a training checkpoint (``<name>/best.pt``) and a
+    published export (``<name>/model.safetensors``). The hosted demo only ever sees
+    the second, since training checkpoints are not published.
+    """
     found = {}
     for name in ("lstm", "transformer"):
-        candidate = root / name / "best.pt"
-        if candidate.exists():
-            found[name] = candidate
+        for candidate in (root / name / "best.pt", root / name / "model.safetensors"):
+            if candidate.exists():
+                found[name] = candidate
+                break
     return found
 
 
@@ -62,11 +72,28 @@ class Demo:
 
     def model(self, name: str):
         if name not in self.models:
-            self.models[name] = load_model(self.checkpoints[name], self.device)[0]
+            path = self.checkpoints[name]
+            if path.suffix == ".safetensors":
+                self.models[name] = load_published(path.parent, self.device)[0]
+            else:
+                self.models[name] = load_model(path, self.device)[0]
         return self.models[name]
+
+    @property
+    def has_corpus(self) -> bool:
+        """Whether the tokenised MAESTRO split is available locally.
+
+        It is not shipped to the hosted demo: the token stream is a derivative of a
+        CC BY-NC-SA dataset, and publishing it would be redistribution. The hosted
+        demo therefore uses pre-measured reference numbers and offers no corpus
+        continuation.
+        """
+        return (self.data_dir / "validation.npy").exists()
 
     def reference(self, length: int) -> dict[str, float | None]:
         """Metrics for real MAESTRO, so the generated numbers have a scale."""
+        if not self.has_corpus:
+            return json.loads(REFERENCE_FILE.read_text())["metrics"]
         if self._reference is None:
             windows = TokenWindowDataset(self.data_dir / "validation.npy", length)
             stride = max(1, len(windows) // REFERENCE_SAMPLES)
@@ -90,7 +117,7 @@ class Demo:
     def build_prompt(self, mode: str, upload, bars: int, length: int) -> list[int]:
         if mode == FROM_UPLOAD and upload is not None:
             return prompt_from_midi(self.tokenizer, Path(upload), bars)
-        if mode == FROM_CORPUS:
+        if mode == FROM_CORPUS and self.has_corpus:
             windows = TokenWindowDataset(self.data_dir / "validation.npy", length)
             index = int(torch.randint(len(windows), (1,)))
             return [int(token) for token in windows[index][0]]
@@ -196,11 +223,10 @@ def build_interface(demo: Demo) -> gr.Blocks:
 
         with gr.Row():
             with gr.Column(scale=1):
-                mode = gr.Radio(
-                    [FROM_SCRATCH, FROM_UPLOAD, FROM_CORPUS],
-                    value=FROM_SCRATCH,
-                    label="Starting point",
-                )
+                choices = [FROM_SCRATCH, FROM_UPLOAD]
+                if demo.has_corpus:
+                    choices.append(FROM_CORPUS)
+                mode = gr.Radio(choices, value=FROM_SCRATCH, label="Starting point")
                 upload = gr.File(label="MIDI file", file_types=[".mid", ".midi"])
                 bars = gr.Slider(1, 16, value=4, step=1, label="Bars to take from it")
                 tokens = gr.Slider(128, 2048, value=768, step=64, label="Tokens to generate")
